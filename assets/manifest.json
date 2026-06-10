@@ -1,7 +1,7 @@
 {
-  "name": "Tristan Swim",
-  "short_name": "Tristan Swim",
-  "start_url": "/nageur/tristan",
+  "name": "PdC Swim",
+  "short_name": "PdC Swim",
+  "start_url": "/",
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#3b82f6",
