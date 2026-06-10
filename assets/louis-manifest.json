@@ -1,0 +1,11 @@
+{
+  "name": "Louis Swim",
+  "short_name": "Louis",
+  "start_url": "/louis.html",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#3b82f6",
+  "icons": [
+    {"src": "/icon.png", "sizes": "512x512", "type": "image/png"}
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "name": "Anthony Swim",
+  "short_name": "Anthony",
+  "start_url": "/anthony.html",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#3b82f6",
+  "icons": [
+    {"src": "/icon.png", "sizes": "512x512", "type": "image/png"}
+  ]
+}

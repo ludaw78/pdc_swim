@@ -1,0 +1,11 @@
+{
+  "name": "Aline Swim",
+  "short_name": "Aline",
+  "start_url": "/aline.html",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ec4899",
+  "icons": [
+    {"src": "/icon.png", "sizes": "512x512", "type": "image/png"}
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "name": "Nola Swim",
+  "short_name": "Nola",
+  "start_url": "/nola.html",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ec4899",
+  "icons": [
+    {"src": "/icon.png", "sizes": "512x512", "type": "image/png"}
+  ]
+}

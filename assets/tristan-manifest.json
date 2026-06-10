@@ -1,0 +1,11 @@
+{
+  "name": "Tristan Swim",
+  "short_name": "Tristan",
+  "start_url": "/tristan.html",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#3b82f6",
+  "icons": [
+    {"src": "/icon.png", "sizes": "512x512", "type": "image/png"}
+  ]
+}
