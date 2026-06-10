@@ -1,7 +1,7 @@
 {
   "name": "Louis Swim",
   "short_name": "Louis",
-  "start_url": "/louis.html",
+  "start_url": "/nageur/louis",
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#3b82f6",

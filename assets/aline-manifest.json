@@ -1,7 +1,7 @@
 {
   "name": "Aline Swim",
   "short_name": "Aline",
-  "start_url": "/aline.html",
+  "start_url": "/nageur/aline",
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#ec4899",

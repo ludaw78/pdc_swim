@@ -1,7 +1,7 @@
 {
   "name": "Anthony Swim",
   "short_name": "Anthony",
-  "start_url": "/anthony.html",
+  "start_url": "/nageur/anthony",
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#3b82f6",

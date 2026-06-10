@@ -594,6 +594,24 @@ class State(rx.State):
             self.active_swimmer_key = ""
             self.selected_nage_state = ""
 
+    def on_load_route(self):
+        """Lit la clé nageur depuis le path /nageur/[key]."""
+        url = self.router.url
+        parts = [p for p in url.split("?")[0].split("/") if p]
+        key = parts[-1] if parts else ""
+        if key and key in SWIMMERS:
+            self.active_swimmer_key = key
+            self.selected_nage_state = ""
+        else:
+            self.active_swimmer_key = ""
+            self.selected_nage_state = ""
+        # Injecter le manifest spécifique au nageur
+        return rx.call_script(
+            f"var l=document.querySelector('link[rel=manifest]');"
+            f"if(l){{l.href='/{key}-manifest.json';}}"
+            f"else{{var n=document.createElement('link');n.rel='manifest';n.href='/{key}-manifest.json';document.head.appendChild(n);}}"
+        )
+
     # ── Propriétés du nageur actif ────────────────────────────────────────────
 
     @rx.var(cache=True)
@@ -1507,3 +1525,11 @@ app = rx.App(
     ],
 )
 app.add_page(index, route="/", on_load=State.on_load)
+app.add_page(index, route="/nageur/tristan",  on_load=State.on_load_route)
+app.add_page(index, route="/nageur/louis",    on_load=State.on_load_route)
+app.add_page(index, route="/nageur/anthony",  on_load=State.on_load_route)
+app.add_page(index, route="/nageur/matthieu", on_load=State.on_load_route)
+app.add_page(index, route="/nageur/aline",    on_load=State.on_load_route)
+app.add_page(index, route="/nageur/nola",     on_load=State.on_load_route)
+app.add_page(index, route="/nageur/arthur",   on_load=State.on_load_route)
+app.add_page(index, route="/nageur/corentin", on_load=State.on_load_route)

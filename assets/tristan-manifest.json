@@ -1,7 +1,7 @@
 {
   "name": "Tristan Swim",
   "short_name": "Tristan",
-  "start_url": "/tristan.html",
+  "start_url": "/nageur/tristan",
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#3b82f6",
