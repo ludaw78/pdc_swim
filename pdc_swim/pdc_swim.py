@@ -18,14 +18,14 @@ from pydantic import BaseModel
 # photo : nom du fichier dans assets/ (laisser "" si pas de photo)
 
 SWIMMERS = {
-    "tristan":  {"name": "Tristan",  "birth_year": 2011, "gender": "M", "ffn_id": "3518107",  "photo": "photo_tristan.png"},
-    "louis":    {"name": "Louis",    "birth_year": 2012, "gender": "M", "ffn_id": "3751537",  "photo": "photo_louis.png"},
-    "anthony":  {"name": "Anthony",  "birth_year": 2010, "gender": "M", "ffn_id": "3700947",  "photo": "photo_anthony.png"},
-    "matthieu": {"name": "Matthieu", "birth_year": 2011, "gender": "M", "ffn_id": "2982827",  "photo": "photo_matthieu.png"},
-    "aline":    {"name": "Aline",    "birth_year": 2011, "gender": "F", "ffn_id": "3061675",  "photo": "photo_aline.png"},
-    "nola":     {"name": "Nola",     "birth_year": 2011, "gender": "F", "ffn_id": "3231817",  "photo": "photo_nola.png"},
-    "arthur":   {"name": "Arthur",   "birth_year": 2014, "gender": "M", "ffn_id": "3736819",  "photo": "photo_arthur.png"},
-    "corentin": {"name": "Corentin", "birth_year": 2006, "gender": "M", "ffn_id": "2550147",  "photo": "photo_corentin.png"},
+    "tristan":  {"name": "Tristan",  "birth_year": 2011, "gender": "M", "ffn_id": "3518107",  "photo": "photo_tristan.jpg"},
+    "louis":    {"name": "Louis",    "birth_year": 2012, "gender": "M", "ffn_id": "3751537",  "photo": "photo_louis.jpg"},
+    "anthony":  {"name": "Anthony",  "birth_year": 2010, "gender": "M", "ffn_id": "3700947",  "photo": "photo_anthony.jpg"},
+    "matthieu": {"name": "Matthieu", "birth_year": 2011, "gender": "M", "ffn_id": "2982827",  "photo": "photo_matthieu.jpg"},
+    "aline":    {"name": "Aline",    "birth_year": 2011, "gender": "F", "ffn_id": "3061675",  "photo": "photo_aline.jpg"},
+    "nola":     {"name": "Nola",     "birth_year": 2011, "gender": "F", "ffn_id": "3231817",  "photo": "photo_nola.jpg"},
+    "arthur":   {"name": "Arthur",   "birth_year": 2014, "gender": "M", "ffn_id": "3736819",  "photo": "photo_arthur.jpg"},
+    "corentin": {"name": "Corentin", "birth_year": 2006, "gender": "M", "ffn_id": "2550147",  "photo": "photo_corentin.jpg"},
 }
 
 DEFAULT_SWIMMER = "tristan"  # affiché si pas de paramètre ?nageur= dans l'URL
