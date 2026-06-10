@@ -11,9 +11,26 @@ from dataclasses import dataclass, field
 from typing import Optional, Union
 from concurrent.futures import ThreadPoolExecutor
 from pydantic import BaseModel
-from config import SWIMMER_NAME, BIRTH_YEAR, GENDER, FFN_ID
 
-# ── 1. PARSEUR ───────────────────────────────────────────────────────────────
+# ── 1. CONFIGURATION NAGEURS ─────────────────────────────────────────────────
+# Pour ajouter un nageur : ajouter une entrée dans ce dict.
+# La clé (ex: "tristan") est utilisée dans l'URL : app.com/?nageur=tristan
+# photo : nom du fichier dans assets/ (laisser "" si pas de photo)
+
+SWIMMERS = {
+    "tristan":  {"name": "Tristan",  "birth_year": 2011, "gender": "M", "ffn_id": "3518107",  "photo": "photo_tristan.png"},
+    "louis":    {"name": "Louis",    "birth_year": 2012, "gender": "M", "ffn_id": "3751537",  "photo": "photo_louis.png"},
+    "anthony":  {"name": "Anthony",  "birth_year": 2010, "gender": "M", "ffn_id": "3700947",  "photo": "photo_anthony.png"},
+    "matthieu": {"name": "Matthieu", "birth_year": 2011, "gender": "M", "ffn_id": "2982827",  "photo": "photo_matthieu.png"},
+    "aline":    {"name": "Aline",    "birth_year": 2011, "gender": "F", "ffn_id": "3061675",  "photo": "photo_aline.png"},
+    "nola":     {"name": "Nola",     "birth_year": 2011, "gender": "F", "ffn_id": "3231817",  "photo": "photo_nola.png"},
+    "arthur":   {"name": "Arthur",   "birth_year": 2014, "gender": "M", "ffn_id": "3736819",  "photo": "photo_arthur.png"},
+    "corentin": {"name": "Corentin", "birth_year": 2006, "gender": "M", "ffn_id": "2550147",  "photo": "photo_corentin.png"},
+}
+
+DEFAULT_SWIMMER = "tristan"  # affiché si pas de paramètre ?nageur= dans l'URL
+
+# ── 2. PARSEUR ────────────────────────────────────────────────────────────────
 
 @dataclass
 class Split:
@@ -98,7 +115,7 @@ def parse_row(row: str, base_url: str = "https://ffn.extranat.fr") -> Optional[P
         splits=splits
     )
 
-# ── 2. TYPES REFLEX ──────────────────────────────────────────────────────────
+# ── 3. TYPES REFLEX ───────────────────────────────────────────────────────────
 
 class SplitRow(BaseModel):
     dist:    str
@@ -129,12 +146,7 @@ class Result(BaseModel):
     N: str
     V: str
 
-# ── 3. CONSTANTES ────────────────────────────────────────────────────────────
-
-
-# Grilles de qualification AURA 2026 — bassin 50m uniquement
-# Source : Programme Sportif Ligue AuRA 2026, pages 26-27
-# Colonnes : Jaune | Vert | Ligue (Bleu) | Challenge National | France U18 | Élite
+# ── 4. CONSTANTES ─────────────────────────────────────────────────────────────
 
 GRILLES = {
     "F": {
@@ -371,9 +383,6 @@ GRILLES = {
     },
 }
 
-# Compatibilité graphe (France U18 = index 4)
-GRILLE_QUALIF_FULL = {cat: {epr: GRILLES[GENDER][cat][epr][4] for epr in GRILLES[GENDER][cat]} for cat in GRILLES[GENDER] if cat in ["U14","U15","U16","U17","U18"]}
-
 NIVEAUX_QUALIF = [
     ("jaune",      "🟡", 'Ligue "Jaune"'),
     ("vert",       "🟢", 'Ligue "Vert"'),
@@ -383,40 +392,52 @@ NIVEAUX_QUALIF = [
     ("elite",      "⭐", "Élite"),
 ]
 
-# Mapping niveaux → index dans GRILLES
 NIVEAU_IDX = {"jaune": 0, "vert": 1, "ligue": 2, "challenge": 3, "france_u18": 4, "elite": 5}
 
-SEP_CHAMP  = "§"
-SEP_SPLIT  = ";"
+SEP_CHAMP = "§"
+SEP_SPLIT = ";"
 
-# Codes épreuves FFN
 EPREUVE_CODES = {
-    "50 NL": 51, "100 NL": 52, "200 NL": 53, "400 NL": 54, "800 NL": 55, "1500 NL": 56,
-    "50 Dos": 61, "100 Dos": 62, "200 Dos": 63,
-    "50 Bra": 71, "100 Bra": 72, "200 Bra": 73,
-    "50 Pap": 81, "100 Pap": 82, "200 Pap": 83,
-    "100 4 N": 90, "200 4 N": 91, "400 4 N": 92,
+    "M": {
+        "50 NL": 51, "100 NL": 52, "200 NL": 53, "400 NL": 54, "800 NL": 55, "1500 NL": 56,
+        "50 Dos": 61, "100 Dos": 62, "200 Dos": 63,
+        "50 Bra": 71, "100 Bra": 72, "200 Bra": 73,
+        "50 Pap": 81, "100 Pap": 82, "200 Pap": 83,
+        "100 4 N": 90, "200 4 N": 91, "400 4 N": 92,
+    },
+    "F": {
+        "50 NL": 1, "100 NL": 2, "200 NL": 3, "400 NL": 4, "800 NL": 5, "1500 NL": 6,
+        "50 Dos": 11, "100 Dos": 12, "200 Dos": 13,
+        "50 Bra": 21, "100 Bra": 22, "200 Bra": 23,
+        "50 Pap": 31, "100 Pap": 32, "200 Pap": 33,
+        "100 4 N": 40, "200 4 N": 41, "400 4 N": 42,
+    },
 }
 
 def current_season_year() -> int:
-    """idsai = année civile courante."""
     return datetime.now().year
 
-def parse_ranking_row(html_content: str, swimmer_id: str = FFN_ID) -> dict:
-    """Extrait les 6 rangs (par cat + TC) depuis la page de classement FFN."""
+def grille_qualif_full(gender: str) -> dict:
+    """GRILLE_QUALIF_FULL calculée dynamiquement selon le genre du nageur actif."""
+    return {
+        cat: {epr: GRILLES[gender][cat][epr][4] for epr in GRILLES[gender][cat]}
+        for cat in GRILLES[gender] if cat in ["U14","U15","U16","U17","U18"]
+    }
+
+def parse_ranking_row(html_content: str, swimmer_id: str) -> dict:
     result = {"dept": "-", "region": "-", "national": "-",
               "dept_tc": "-", "region_tc": "-", "national_tc": "-"}
     rows = find_all(r"<tr[^>]*>(.*?)</tr>", html_content)
     target_row = next((r for r in rows if swimmer_id in r), None)
     if not target_row:
         return result
-    all_tippies = re.findall(r'data-tippy-content="(.*?)"(?:\s|>)', target_row, re.DOTALL)
+    all_tippies = re.findall(r'data-tippy-content="((?:[^"\\]|\\.)*)"', target_row, re.DOTALL)
     if not all_tippies:
-        all_tippies = re.findall(r"data-tippy-content='(.*?)'(?:\s|>)", target_row, re.DOTALL)
-    raw_tippy = next((t for t in all_tippies if "Rang" in html.unescape(t)), None)
+        all_tippies = re.findall(r"data-tippy-content='((?:[^'\\]|\\.)*)'", target_row, re.DOTALL)
+    raw_tippy = next((t for t in all_tippies if "Rang" in html.unescape(t.replace("\\'", "'"))), None)
     if not raw_tippy:
         return result
-    tippy = html.unescape(raw_tippy)
+    tippy = html.unescape(raw_tippy.replace("\\'", "'"))
 
     def extract_rank(pattern):
         m = re.search(pattern, tippy, re.DOTALL)
@@ -432,8 +453,7 @@ def parse_ranking_row(html_content: str, swimmer_id: str = FFN_ID) -> dict:
     result["dept_tc"]     = extract_rank(r"Rang d[ée]part[^→]*toutes cat[^→]*→\s*<b>(.*?)</b>")
     return result
 
-def parse_top10(html_content: str, swimmer_id: str = FFN_ID) -> list:
-    """Extrait les 10 premiers nageurs du classement. Marque Tristan avec is_tristan=True."""
+def parse_top10(html_content: str, swimmer_id: str) -> list:
     result = []
     rows = find_all(r"<tr[^>]*>(.*?)</tr>", html_content)
     count = 0
@@ -449,14 +469,12 @@ def parse_top10(html_content: str, swimmer_id: str = FFN_ID) -> list:
             nom = re.sub(r'\s+', ' ', nom).strip()
         except:
             pass
-        # Extraire temps (4e td généralement)
         temps = strip_tags(tds[2]) if len(tds) > 2 else "-"
-        is_tristan = swimmer_id in row
-        result.append({"rang": rang, "nom": nom, "temps": temps, "moi": is_tristan})
+        is_me = swimmer_id in row
+        result.append({"rang": rang, "nom": nom, "temps": temps, "moi": is_me})
         count += 1
         if count >= 10: break
     return result
-
 
 def to_sec(t) -> float:
     try:
@@ -485,7 +503,6 @@ def decode_splits(raw: str) -> list[SplitRow]:
         items = json.loads(raw)
         return [SplitRow(dist=str(i["d"]) + "m", cumul=i["c"], partiel=i["l"], half=i["h"]) for i in items]
     except Exception:
-        # Fallback : ancien format SEP_CHAMP/SEP_SPLIT pour LocalStorage existant
         rows = []
         for seg in raw.split(SEP_SPLIT):
             parts = seg.split(SEP_CHAMP)
@@ -494,7 +511,6 @@ def decode_splits(raw: str) -> list[SplitRow]:
         return rows
 
 def _fetch_url(url: str, retries: int = 2) -> str:
-    """Fetch HTTP avec headers Chrome. Retry x2 avec backoff 1s sur erreur transitoire."""
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -516,56 +532,171 @@ def _fetch_url(url: str, retries: int = 2) -> str:
     raise last_exc
 
 def _fetch_one(args: tuple) -> tuple:
-    """Fetche une seule URL — 108 tâches indépendantes en parallèle."""
-    bc, bl, epr_name, idepr, sai, cat, scope = args
-    base = f"https://ffn.extranat.fr/webffn/nat_rankings.php?idact=nat&idopt=sai&go=epr&idbas={bc}&idepr={idepr}&idsai={sai}&idcat={cat}"
+    bc, bl, epr_name, idepr, sai, cat, scope, ffn_id = args
+    if cat > 18:
+        base = f"https://ffn.extranat.fr/webffn/nat_rankings.php?idact=nat&idopt=sai&go=epr&idbas={bc}&idepr={idepr}&idsai={sai}"
+    else:
+        base = f"https://ffn.extranat.fr/webffn/nat_rankings.php?idact=nat&idopt=sai&go=epr&idbas={bc}&idepr={idepr}&idsai={sai}&idcat={cat}"
     suffix = {"dept": "&iddep=1611", "region": "&idreg=3004", "national": ""}[scope]
     try:
         h = _fetch_url(base + suffix)
-        rank = parse_ranking_row(h) if scope == "dept" else None
-        top  = parse_top10(h)
+        rank = parse_ranking_row(h, ffn_id) if scope == "dept" else None
+        top  = parse_top10(h, ffn_id)
         return (bl, epr_name, scope, rank, top)
     except:
         fallback_rank = {"dept": "-", "region": "-", "national": "-"} if scope == "dept" else None
         return (bl, epr_name, scope, fallback_rank, [])
 
-def flag_svg():
-    return rx.box(
-        rx.html('<svg width="14" height="10" viewBox="0 0 3 2" style="display:inline-block;vertical-align:middle;margin-left:4px;border-radius:1px;"><rect width="1" height="2" fill="#002395"/><rect width="1" height="2" x="1" fill="#fff"/><rect width="1" height="2" x="2" fill="#ed2939"/></svg>'),
-        display="inline-block",
-    )
+# ── 5. STATE ──────────────────────────────────────────────────────────────────
 
 class State(rx.State):
+    # Navigation : "" = accueil, "tristan" = page nageur, "tristan|100 Bra" = page nage
+    active_swimmer_key: str = ""
     current_bassin: str = "50m"
     selected_nage_state: str = ""
-    results_json: str = rx.LocalStorage("[]", name=f"swim_{FFN_ID}_v92")
-    last_update_str_store: str = rx.LocalStorage("0", name=f"up_{FFN_ID}_v92")
+    # Données par nageur — clé = swimmer_key
+    all_results_json:   str = rx.LocalStorage("{}", name="multi_results_v1")
+    all_rankings_json:  str = rx.LocalStorage("{}", name="multi_ranks_v1")
+    all_top10_json:     str = rx.LocalStorage("{}", name="multi_top10_v1")
+    all_last_update:    str = rx.LocalStorage("{}", name="multi_upd_v1")
     loading: bool = False
-    rankings_json: str = rx.LocalStorage("{}", name=f"rank_{FFN_ID}_v96")
-    top10_json: str = rx.LocalStorage("{}", name=f"top10_{FFN_ID}_v4")
-    top10_dialog_open: bool = False
+    # Dialogs
+    top10_dialog_open:  bool = False
     top10_dialog_title: str = ""
-    top10_dialog_key: str = ""
-    top10_loading: bool = False
-    dialog_open: bool = False
-    dialog_key:  str = ""
-    dialog_lieu: str = ""
-    dialog_type: str = ""
-    dialog_date: str = ""
+    top10_dialog_key:   str = ""
+    top10_loading:      bool = False
+    dialog_open:        bool = False
+    dialog_key:         str = ""
+    dialog_lieu:        str = ""
+    dialog_type:        str = ""
+    dialog_date:        str = ""
     dialog_splits_data: list[SplitRow] = []
 
-    def on_load(self): pass
+    def on_load(self):
+        """Lit les paramètres ?nageur= et &nage= dans l'URL au chargement."""
+        url = self.router.url
+        key = ""
+        nage = ""
+        if "nageur=" in url:
+            try:
+                key = url.split("nageur=")[1].split("&")[0].strip()
+            except:
+                key = ""
+        if "nage=" in url:
+            try:
+                nage = url.split("nage=")[1].split("&")[0].replace("+", " ").strip()
+            except:
+                nage = ""
+        if key and key in SWIMMERS:
+            self.active_swimmer_key = key
+            self.selected_nage_state = nage if nage else ""
+        else:
+            self.active_swimmer_key = ""
+            self.selected_nage_state = ""
+
+    # ── Propriétés du nageur actif ────────────────────────────────────────────
 
     @rx.var(cache=True)
-    def selected_nage(self) -> str:
-        return self.selected_nage_state
+    def swimmer(self) -> dict:
+        key = self.active_swimmer_key if self.active_swimmer_key in SWIMMERS else DEFAULT_SWIMMER
+        return SWIMMERS[key]
+
+    @rx.var(cache=True)
+    def swimmer_name(self) -> str:
+        return self.swimmer.get("name", "")
+
+    @rx.var(cache=True)
+    def swimmer_ffn_id(self) -> str:
+        return self.swimmer.get("ffn_id", "")
+
+    @rx.var(cache=True)
+    def swimmer_gender(self) -> str:
+        return self.swimmer.get("gender", "M")
+
+    @rx.var(cache=True)
+    def swimmer_birth_year(self) -> int:
+        return self.swimmer.get("birth_year", 2000)
+
+    @rx.var(cache=True)
+    def swimmer_photo(self) -> str:
+        return self.swimmer.get("photo", "")
+
+    # ── Données actives ───────────────────────────────────────────────────────
+
+    @rx.var(cache=True)
+    def results_json(self) -> str:
+        try:
+            d = json.loads(self.all_results_json)
+            return json.dumps(d.get(self.active_swimmer_key, []))
+        except:
+            return "[]"
+
+    @rx.var(cache=True)
+    def rankings_json(self) -> str:
+        try:
+            d = json.loads(self.all_rankings_json)
+            return json.dumps(d.get(self.active_swimmer_key, {}))
+        except:
+            return "{}"
+
+    @rx.var(cache=True)
+    def top10_json(self) -> str:
+        try:
+            d = json.loads(self.all_top10_json)
+            return json.dumps(d.get(self.active_swimmer_key, {}))
+        except:
+            return "{}"
+
+    @rx.var(cache=True)
+    def last_up_display(self) -> str:
+        try:
+            d = json.loads(self.all_last_update)
+            val = float(d.get(self.active_swimmer_key, 0))
+            if val <= 0: return ""
+            from datetime import timezone
+            dt = datetime.fromtimestamp(val, tz=timezone.utc).astimezone()
+            return f"MAJ : {dt.strftime('%d/%m/%Y %H:%M')}"
+        except:
+            return ""
+
+    # ── Navigation ────────────────────────────────────────────────────────────
+
+    def select_swimmer(self, key: str):
+        self.active_swimmer_key = key
+        self.selected_nage_state = ""
+        self.current_bassin = "50m"
+        return rx.call_script(f"window.history.replaceState(null, '', '?nageur={key}')")
+
+
+    def nav_to_accueil(self):
+        self.active_swimmer_key = ""
+        self.selected_nage_state = ""
+        return rx.call_script("window.history.replaceState(null, '', '/')")
 
     def change_bassin(self, v: Union[str, list[str]]):
         self.current_bassin = v[0] if isinstance(v, list) else v
         return rx.call_script("window.scrollTo({top: 0, behavior: 'instant'})")
 
+    def nav_to_nage(self, n: str):
+        self.selected_nage_state = n
+        key = self.active_swimmer_key
+
+
+    def nav_back_to_nageur(self):
+        self.selected_nage_state = "" 
+
+    # ── Catégorie ─────────────────────────────────────────────────────────────
+
     @rx.var(cache=True)
-    def current_category(self) -> str: return f"U{current_season_year() - BIRTH_YEAR}"
+    def current_category(self) -> str:
+        return f"U{current_season_year() - self.swimmer_birth_year}"
+
+    @rx.var(cache=True)
+    def is_senior(self) -> bool:
+        return (current_season_year() - self.swimmer_birth_year) > 18
+
+
+    # ── Qualifications ────────────────────────────────────────────────────────
 
     _QUALIF_KEY_MAP = {
         "NL": "NL", "LIBRE": "NL",
@@ -582,23 +713,14 @@ class State(rx.State):
     @rx.var(cache=True)
     def qualif_time_val(self) -> str:
         if self.current_bassin != "50m": return ""
-        return GRILLE_QUALIF_FULL.get(self.current_category, {}).get(self.get_qualif_key(self.selected_nage), "")
-
-    @rx.var(cache=True)
-    def qualif_time_formatted(self) -> str:
-        """Formate le temps de qualif au même format que FFN : MM:SS.ss ou 00:SS.ss."""
-        t = self.qualif_time_val
-        if not t: return ""
-        try:
-            secs = to_sec(t)
-            m = int(secs // 60)
-            s = secs - m * 60
-            return f"{m:02d}:{s:05.2f}"
-        except: return t
+        gqf = grille_qualif_full(self.swimmer_gender)
+        return gqf.get(self.current_category, {}).get(self.get_qualif_key(self.selected_nage), "")
 
     @rx.var(cache=True)
     def qualif_rows(self) -> list[QualifRow]:
         if self.current_bassin != "50m" or not self.selected_nage: return []
+        age = current_season_year() - self.swimmer_birth_year
+        if age < 14: return []
         cat = self.current_category
         cat_key = cat if cat in ["U14","U15","U16","U17","U18"] else "U18+"
         key = self.get_qualif_key(self.selected_nage)
@@ -606,7 +728,7 @@ class State(rx.State):
         rows = []
         for niveau, picto, label in NIVEAUX_QUALIF:
             idx = NIVEAU_IDX[niveau]
-            vals = GRILLES.get(GENDER, {}).get(cat_key, {}).get(key, [])
+            vals = GRILLES.get(self.swimmer_gender, {}).get(cat_key, {}).get(key, [])
             t_str = vals[idx] if len(vals) > idx else ""
             if not t_str:
                 rows.append(QualifRow(picto=picto, label=label, temps="-", ecart="-", qualif=False))
@@ -629,15 +751,7 @@ class State(rx.State):
             rows.append(QualifRow(picto=picto, label=label, temps=temps_fmt, ecart=ecart, qualif=qualif))
         return rows
 
-    @rx.var(cache=True)
-    def last_up_display(self) -> str:
-        try:
-            val = float(self.last_update_str_store)
-            if val <= 0: return ""
-            from datetime import timezone
-            dt = datetime.fromtimestamp(val, tz=timezone.utc).astimezone()
-            return f"MAJ : {dt.strftime('%d/%m/%Y %H:%M')}"
-        except: return ""
+    # ── Résultats ─────────────────────────────────────────────────────────────
 
     @rx.var(cache=True)
     def current_results_list(self) -> list[Result]:
@@ -670,6 +784,10 @@ class State(rx.State):
     @rx.var(cache=True)
     def nages_4n(self) -> list[str]:
         return [n for n in self.available_nages if "4 N" in n.upper()]
+
+    @rx.var(cache=True)
+    def selected_nage(self) -> str:
+        return self.selected_nage_state
 
     @rx.var(cache=True)
     def filtered_data(self) -> list[Result]:
@@ -711,25 +829,7 @@ class State(rx.State):
         )
         return f
 
-    @rx.var(cache=True)
-    def dialog_splits(self) -> list[SplitRow]:
-        return self.dialog_splits_data
-
-    def open_dialog(self, key: str, lieu: str, type_compet: str, date: str):
-        self.dialog_key  = key
-        self.dialog_lieu = lieu
-        self.dialog_type = type_compet
-        self.dialog_date = date
-        rows: list[SplitRow] = []
-        for r in self.filtered_data:
-            if r.D + r.T == key and r.S:
-                rows = decode_splits(r.S)
-                break
-        self.dialog_splits_data = rows
-        self.dialog_open = True
-
-    def close_dialog(self):
-        self.dialog_open = False
+    # ── Classements ───────────────────────────────────────────────────────────
 
     @rx.var(cache=True)
     def current_rankings(self) -> dict:
@@ -738,77 +838,9 @@ class State(rx.State):
 
     @rx.var(cache=True)
     def selected_nage_rankings(self) -> dict:
-        """Classements pour la nage+bassin sélectionnée."""
-        # Normaliser : "50 Bra." -> "50 Bra", "200 Pap." -> "200 Pap"
         nage = self.selected_nage.rstrip(".")
         key = f"{nage}|{self.current_bassin}"
         return self.current_rankings.get(key, {"dept": "—", "region": "—", "national": "—"})
-
-    def force_refresh(self):
-        if self.loading: return
-        self.loading = True
-        yield
-        all_res = []
-        all_ranks = {}
-        all_top10 = {}
-        sai = current_season_year()
-        cat = sai - BIRTH_YEAR
-
-        try:
-            # ── 1. Performances 25m + 50m en parallèle ───────────────
-            def fetch_perf(args):
-                bc, bl = args
-                url = f"https://ffn.extranat.fr/webffn/nat_recherche.php?idact=nat&idrch_id={FFN_ID}&idopt=prf&idbas={bc}"
-                html_content = _fetch_url(url)
-                perfs = []
-                for row in find_all(r"<tr\b[^>]*class=[^>]*border-b[^>]*>(.*?)</tr>", html_content):
-                    perf = parse_row(row)
-                    if perf:
-                        perfs.append({
-                            "E": perf.epreuve, "T": perf.temps_final, "P": perf.points,
-                            "D": perf.date, "B": bl, "S": encode_splits(perf.splits),
-                            "N": perf.competition, "V": perf.type_compet,
-                        })
-                return perfs
-
-            with ThreadPoolExecutor(max_workers=2) as ex:
-                futures_perf = [ex.submit(fetch_perf, args) for args in [("25", "25m"), ("50", "50m")]]
-                for f in futures_perf:
-                    try:
-                        all_res.extend(f.result(timeout=20))
-                    except Exception as e:
-                        print(f"[force_refresh] fetch_perf ERREUR: {e}")
-
-            self.results_json = json.dumps(all_res)
-            self.last_update_str_store = str(time.time())
-            yield
-
-            # ── 2. Classements Isère (36 requêtes parallèles) ────────
-            tasks_isere = [
-                (bc, bl, epr_name, idepr, sai, cat, "dept")
-                for bc, bl in [("25", "25m"), ("50", "50m")]
-                for epr_name, idepr in EPREUVE_CODES.items()
-            ]
-            all_top10 = {}
-            with ThreadPoolExecutor(max_workers=12) as ex:
-                futures = {ex.submit(_fetch_one, t): t for t in tasks_isere}
-                for fut in futures:
-                    try:
-                        bl, epr_name, scope, rank, top = fut.result(timeout=20)
-                        all_ranks[f"{epr_name}|{bl}"]      = rank
-                        all_top10[f"{epr_name}|{bl}|dept"] = top
-                    except Exception as e:
-                        t = futures[fut]
-                        print(f"[force_refresh] classement ERREUR {t[2]}|{t[1]}: {e}")
-
-            self.rankings_json = json.dumps(all_ranks)
-            self.top10_json    = json.dumps(all_top10)
-
-        except Exception as e:
-            print(f"[force_refresh] ERREUR: {type(e).__name__}: {e}")
-        finally:
-            self.loading = False
-            yield
 
     @rx.var(cache=True)
     def ranking_national_txt(self) -> str:
@@ -838,6 +870,89 @@ class State(rx.State):
     def ranking_title(self) -> str:
         return f"Classement {current_season_year()}"
 
+    # ── Refresh ───────────────────────────────────────────────────────────────
+
+    def force_refresh(self):
+        if self.loading: return
+        if self.active_swimmer_key not in SWIMMERS: return
+        self.loading = True
+        yield
+        ffn_id     = self.swimmer_ffn_id
+        birth_year = self.swimmer_birth_year
+        sai        = current_season_year()
+        cat        = sai - birth_year
+        key        = self.active_swimmer_key
+
+        try:
+            all_results  = json.loads(self.all_results_json)  if self.all_results_json  not in ("{}", "") else {}
+            all_rankings = json.loads(self.all_rankings_json) if self.all_rankings_json not in ("{}", "") else {}
+            all_top10    = json.loads(self.all_top10_json)    if self.all_top10_json    not in ("{}", "") else {}
+            all_upd      = json.loads(self.all_last_update)   if self.all_last_update   not in ("{}", "") else {}
+
+            # ── 1. Performances 25m + 50m en parallèle ───────────────
+            def fetch_perf(args):
+                bc, bl = args
+                url = f"https://ffn.extranat.fr/webffn/nat_recherche.php?idact=nat&idrch_id={ffn_id}&idopt=prf&idbas={bc}"
+                html_content = _fetch_url(url)
+                perfs = []
+                for row in find_all(r"<tr\b[^>]*class=[^>]*border-b[^>]*>(.*?)</tr>", html_content):
+                    perf = parse_row(row)
+                    if perf:
+                        perfs.append({
+                            "E": perf.epreuve, "T": perf.temps_final, "P": perf.points,
+                            "D": perf.date, "B": bl, "S": encode_splits(perf.splits),
+                            "N": perf.competition, "V": perf.type_compet,
+                        })
+                return perfs
+
+            new_res = []
+            with ThreadPoolExecutor(max_workers=2) as ex:
+                futures_perf = [ex.submit(fetch_perf, args) for args in [("25", "25m"), ("50", "50m")]]
+                for f in futures_perf:
+                    try:
+                        new_res.extend(f.result(timeout=20))
+                    except Exception as e:
+                        print(f"[force_refresh] fetch_perf ERREUR: {e}")
+
+            all_results[key] = new_res
+            all_upd[key]     = time.time()
+            self.all_results_json  = json.dumps(all_results)
+            self.all_last_update   = json.dumps(all_upd)
+            yield
+
+            # ── 2. Classements Isère (36 requêtes parallèles) ────────
+            gender = self.swimmer_gender
+            tasks_isere = [
+                (bc, bl, epr_name, idepr, sai, cat, "dept", ffn_id)
+                for bc, bl in [("25", "25m"), ("50", "50m")]
+                for epr_name, idepr in EPREUVE_CODES.get(gender, EPREUVE_CODES["M"]).items()
+            ]
+            new_ranks = {}
+            new_top10 = {}
+            with ThreadPoolExecutor(max_workers=12) as ex:
+                futures = {ex.submit(_fetch_one, t): t for t in tasks_isere}
+                for fut in futures:
+                    try:
+                        bl, epr_name, scope, rank, top = fut.result(timeout=20)
+                        new_ranks[f"{epr_name}|{bl}"]      = rank
+                        new_top10[f"{epr_name}|{bl}|dept"] = top
+                    except Exception as e:
+                        t = futures[fut]
+                        print(f"[force_refresh] classement ERREUR {t[2]}|{t[1]}: {e}")
+
+            all_rankings[key] = new_ranks
+            all_top10[key]    = new_top10
+            self.all_rankings_json = json.dumps(all_rankings)
+            self.all_top10_json    = json.dumps(all_top10)
+
+        except Exception as e:
+            print(f"[force_refresh] ERREUR: {type(e).__name__}: {e}")
+        finally:
+            self.loading = False
+            yield
+
+    # ── Top 10 ────────────────────────────────────────────────────────────────
+
     @rx.var(cache=True)
     def top10_dialog_data(self) -> list[Top10Entry]:
         try:
@@ -848,64 +963,76 @@ class State(rx.State):
             return []
 
     def open_top10(self, scope: str):
-        """scope: 'national','region','dept','national_tc','region_tc','dept_tc'"""
         nage = self.selected_nage.rstrip(".")
         self.top10_dialog_key = f"{nage}|{self.current_bassin}|{scope}"
         tc = scope.endswith("_tc")
         base_scope = scope.replace("_tc", "")
         labels = {"national": "France", "region": "AURA", "dept": "Isère"}
-        cat = current_season_year() - BIRTH_YEAR
+        cat = current_season_year() - self.swimmer_birth_year
         suffix = " TC" if tc else f" U{cat}"
         self.top10_dialog_title = f"Top 10 {labels[base_scope]}{suffix} — {nage} ({self.current_bassin})"
         self.top10_dialog_open = True
-        # Vérifier si déjà en cache
         all_top10 = json.loads(self.top10_json) if self.top10_json not in ("{}", "") else {}
         if f"{nage}|{self.current_bassin}|{scope}" in all_top10:
             return
         self.top10_loading = True
         yield
-        idepr = EPREUVE_CODES.get(nage, None)
+        idepr = EPREUVE_CODES.get(self.swimmer_gender, EPREUVE_CODES["M"]).get(nage, None)
         if idepr is None:
             self.top10_loading = False
             return
-        sai = current_season_year()
-        cat_val = sai - BIRTH_YEAR
+        sai    = current_season_year()
+        cat_val = sai - self.swimmer_birth_year
         bc = "50" if self.current_bassin == "50m" else "25"
         bl = self.current_bassin
-        # URL de base — TC = sans idcat
-        if tc:
+        ffn_id = self.swimmer_ffn_id
+        if tc or cat_val > 18:
             base_url = f"https://ffn.extranat.fr/webffn/nat_rankings.php?idact=nat&idopt=sai&go=epr&idbas={bc}&idepr={idepr}&idsai={sai}"
-            suffix_map = {"national_tc": "", "region_tc": "&idreg=3004", "dept_tc": "&iddep=1611"}
-            url = base_url + suffix_map[scope]
-            try:
-                h = _fetch_url(url)
-                top = parse_top10(h)
-                all_top10[f"{nage}|{bl}|{scope}"] = top
-            except:
-                all_top10[f"{nage}|{bl}|{scope}"] = []
+            suffix_map = {"national": "", "national_tc": "", "region": "&idreg=3004", "region_tc": "&idreg=3004", "dept": "&iddep=1611", "dept_tc": "&iddep=1611"}
+            url = base_url + suffix_map.get(scope, "")
         else:
             base_url = f"https://ffn.extranat.fr/webffn/nat_rankings.php?idact=nat&idopt=sai&go=epr&idbas={bc}&idepr={idepr}&idsai={sai}&idcat={cat_val}"
             suffix_map = {"national": "", "region": "&idreg=3004", "dept": "&iddep=1611"}
-            url = base_url + suffix_map[scope]
-            try:
-                h = _fetch_url(url)
-                top = parse_top10(h)
-                all_top10[f"{nage}|{bl}|{scope}"] = top
-            except:
-                all_top10[f"{nage}|{bl}|{scope}"] = []
-        self.top10_json = json.dumps(all_top10)
+            url = base_url + suffix_map.get(scope, "")
+        try:
+            h = _fetch_url(url)
+            top = parse_top10(h, ffn_id)
+            all_top10[f"{nage}|{bl}|{scope}"] = top
+        except:
+            all_top10[f"{nage}|{bl}|{scope}"] = []
+
+        # Sauvegarder dans le store multi-nageurs
+        all_top10_store = json.loads(self.all_top10_json) if self.all_top10_json not in ("{}", "") else {}
+        all_top10_store[self.active_swimmer_key] = all_top10
+        self.all_top10_json = json.dumps(all_top10_store)
         self.top10_loading = False
 
     def close_top10(self):
         self.top10_dialog_open = False
 
-    def nav_to_nage(self, n: str):
-        self.selected_nage_state = n
+    # ── Splits dialog ─────────────────────────────────────────────────────────
 
-    def nav_back(self):
-        self.selected_nage_state = ""
+    @rx.var(cache=True)
+    def dialog_splits(self) -> list[SplitRow]:
+        return self.dialog_splits_data
 
-# ── 5. COMPOSANTS UI ─────────────────────────────────────────────────────────
+    def open_dialog(self, key: str, lieu: str, type_compet: str, date: str):
+        self.dialog_key  = key
+        self.dialog_lieu = lieu
+        self.dialog_type = type_compet
+        self.dialog_date = date
+        rows: list[SplitRow] = []
+        for r in self.filtered_data:
+            if r.D + r.T == key and r.S:
+                rows = decode_splits(r.S)
+                break
+        self.dialog_splits_data = rows
+        self.dialog_open = True
+
+    def close_dialog(self):
+        self.dialog_open = False
+
+# ── 6. COMPOSANTS UI ─────────────────────────────────────────────────────────
 
 def qualif_row_ui(r: QualifRow) -> rx.Component:
     return rx.hstack(
@@ -957,10 +1084,7 @@ def top10_dialog() -> rx.Component:
                     rx.center(rx.spinner(size="3"), padding="20px"),
                     rx.cond(
                         State.top10_dialog_data.length() > 0,
-                        rx.vstack(
-                            rx.foreach(State.top10_dialog_data, top10_row_ui),
-                            spacing="1", width="100%",
-                        ),
+                        rx.vstack(rx.foreach(State.top10_dialog_data, top10_row_ui), spacing="1", width="100%"),
                         rx.text("Aucune donnée", font_size="0.8em", color=rx.color("gray", 10)),
                     ),
                 ),
@@ -978,7 +1102,6 @@ def top10_dialog() -> rx.Component:
     )
 
 def split_row_ui(s: SplitRow) -> rx.Component:
-    """Ligne de split : distance | cumulé | (partiel si 50m) | [half si présent]."""
     return rx.hstack(
         rx.text(s.dist + " :", font_size="0.75em", color=rx.color("gray", 10), width="52px", text_align="right"),
         rx.text(s.cumul,       font_size="0.75em", font_weight="bold", color=rx.color("gray", 12), width="64px"),
@@ -999,28 +1122,19 @@ def splits_dialog() -> rx.Component:
     return rx.dialog.root(
         rx.dialog.content(
             rx.vstack(
-                # En-tête : lieu en gras, date + type en dessous, croix à droite
                 rx.hstack(
                     rx.vstack(
                         rx.text(State.dialog_lieu, font_weight="bold", font_size="0.9em", color=rx.color("gray", 12)),
-                        rx.text(
-                            State.dialog_date + "  " + State.dialog_type,
-                            font_size="0.72em", color=rx.color("gray", 10),
-                        ),
+                        rx.text(State.dialog_date + "  " + State.dialog_type, font_size="0.72em", color=rx.color("gray", 10)),
                         spacing="0", align_items="start",
                     ),
                     rx.spacer(),
                     rx.dialog.close(
-                        rx.button(
-                            rx.icon(tag="x", size=16),
-                            variant="ghost", size="1",
-                            on_click=State.close_dialog,
-                        ),
+                        rx.button(rx.icon(tag="x", size=16), variant="ghost", size="1", on_click=State.close_dialog),
                     ),
                     width="100%", align="start",
                 ),
                 rx.divider(),
-                # Splits scrollables
                 rx.cond(
                     State.dialog_splits.length() > 0,
                     rx.vstack(
@@ -1042,6 +1156,90 @@ def splits_dialog() -> rx.Component:
         on_open_change=State.close_dialog,
     )
 
+def swimmer_card(key: str, sw: dict) -> rx.Component:
+    """Carte nageur compacte — photo 60px."""
+    photo = sw.get("photo", "")
+    age = current_season_year() - sw["birth_year"]
+    cat = "TC" if age > 18 else f"U{age}"
+    return rx.box(
+        rx.hstack(
+            rx.cond(
+                photo != "",
+                rx.image(src=f"/{photo}", width="52px", height="52px", border_radius="50%", object_fit="cover"),
+                rx.box(
+                    rx.text(sw["name"][0], font_size="1.2em", font_weight="bold", color=rx.color("blue", 9)),
+                    width="52px", height="52px", border_radius="50%",
+                    background_color=rx.color("blue", 3),
+                    display="flex", align_items="center", justify_content="center",
+                    flex_shrink="0",
+                ),
+            ),
+            rx.vstack(
+                rx.text(sw["name"], font_weight="bold", font_size="0.9em", color=rx.color("gray", 12)),
+                rx.text(cat, font_size="0.75em", color=rx.color("gray", 10)),
+                spacing="0", align_items="start",
+            ),
+            spacing="3", align="center",
+        ),
+        padding="10px 14px",
+        border_radius="10px",
+        border="1px solid var(--gray-4)",
+        background_color=rx.color("gray", 2),
+        cursor="pointer",
+        _hover={"background_color": rx.color("blue", 2), "border_color": rx.color("blue", 6)},
+        on_click=State.select_swimmer(key),
+        width="100%",
+    )
+
+
+def header_accueil() -> rx.Component:
+    return rx.hstack(
+        rx.image(src="/icon.png", width="40px", height="40px", border_radius="8px", object_fit="cover"),
+        rx.text("Pont de Claix Natation", font_weight="bold", font_size="0.95em", color=rx.color("gray", 12)),
+        rx.spacer(),
+        rx.color_mode.button(variant="ghost"),
+        width="100%", align="center", padding_x="1em", padding_y="0.6em",
+        border_bottom="1px solid var(--gray-4)",
+        background_color=rx.color("gray", 1),
+    )
+
+def header_nageur() -> rx.Component:
+    return rx.hstack(
+        rx.image(
+            src="/icon.png", width="40px", height="40px", border_radius="8px", object_fit="cover",
+            cursor="pointer", on_click=State.nav_to_accueil,
+        ),
+        rx.spacer(),
+        rx.hstack(
+            rx.cond(
+                State.swimmer_photo != "",
+                rx.image(src="/" + State.swimmer_photo, width="36px", height="36px", border_radius="50%", object_fit="cover"),
+                rx.box(
+                    rx.text(State.swimmer_name[0], font_size="1.1em", font_weight="bold", color=rx.color("blue", 9)),
+                    width="36px", height="36px", border_radius="50%",
+                    background_color=rx.color("blue", 3),
+                    display="flex", align_items="center", justify_content="center",
+                ),
+            ),
+            rx.text(State.swimmer_name, font_weight="bold", font_size="0.9em", color=rx.color("gray", 12)),
+            spacing="2", align="center",
+            cursor="pointer", on_click=State.nav_back_to_nageur,
+        ),
+        rx.spacer(),
+        rx.hstack(
+            rx.color_mode.button(variant="ghost"),
+            rx.button(rx.icon(tag="refresh-cw"), on_click=State.force_refresh, variant="ghost", loading=State.loading),
+            spacing="1",
+        ),
+        width="100%", align="center", padding_x="1em", padding_y="0.6em",
+        border_bottom="1px solid var(--gray-4)",
+        background_color=rx.color("gray", 1),
+        position="sticky", top="0", z_index="10",
+    )
+
+def header_nage() -> rx.Component:
+    return header_nageur()
+
 def index():
     l_style = dict(font_size="0.75em", font_weight="bold", color=rx.color("gray", 11), margin_bottom="4px", margin_left="4px")
     return rx.theme(
@@ -1049,203 +1247,246 @@ def index():
         splits_dialog(),
         top10_dialog(),
         rx.cond(
-            State.selected_nage == "",
-            # ── Page d'accueil ───────────────────────────────────────
+            State.active_swimmer_key == "",
+            # ── PAGE ACCUEIL : grille nageurs ────────────────────────
             rx.vstack(
-                rx.hstack(
-                    rx.heading(f"{SWIMMER_NAME} Swim 🏊‍♂️", size="7", color=rx.color("gray", 12)),
-                    rx.spacer(),
-                    rx.color_mode.button(variant="ghost"),
-                    rx.button(rx.icon(tag="refresh-cw"), on_click=State.force_refresh, variant="ghost", loading=State.loading),
-                    width="100%", align="center",
-                ),
+                header_accueil(),
                 rx.vstack(
-                    rx.text("Bassin", style=l_style),
-                    rx.segmented_control.root(
-                        rx.segmented_control.item("25m", value="25m"),
-                        rx.segmented_control.item("50m", value="50m"),
-                        on_change=State.change_bassin, value=State.current_bassin, width="100%",
+                    rx.text("Garçons", font_size="0.8em", font_weight="bold", color=rx.color("gray", 10), padding_x="1em"),
+                    rx.vstack(
+                        *[swimmer_card(k, v) for k, v in sorted(
+                            ((k, v) for k, v in SWIMMERS.items() if v["gender"] == "M"),
+                            key=lambda x: x[1]["birth_year"], reverse=True
+                        )],
+                        spacing="2", width="100%", padding_x="1em",
                     ),
-                    width="100%", align_items="start", spacing="0",
-                ),
-                rx.vstack(
-                    rx.text("Nage", style=l_style),
-                    rx.cond(
-                        State.available_nages.length() > 0,
-                        rx.vstack(
-                            rx.grid(rx.foreach(State.nages_nl, lambda n: rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%")), columns="2", spacing="2", width="100%"),
-                            rx.divider(),
-                            rx.grid(rx.foreach(State.nages_bra, lambda n: rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%")), columns="2", spacing="2", width="100%"),
-                            rx.divider(),
-                            rx.grid(rx.foreach(State.nages_pap, lambda n: rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%")), columns="2", spacing="2", width="100%"),
-                            rx.divider(),
-                            rx.grid(rx.foreach(State.nages_dos, lambda n: rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%")), columns="2", spacing="2", width="100%"),
-                            rx.divider(),
-                            rx.grid(rx.foreach(State.nages_4n, lambda n: rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%")), columns="2", spacing="2", width="100%"),
-                            spacing="2", width="100%",
-                        ),
-                        rx.center(
-                            rx.html('''
-                                <style>
-                                    @keyframes swim {
-                                        0%   { transform: translateX(-40px) scaleX(-1); }
-                                        49%  { transform: translateX(40px) scaleX(-1); }
-                                        50%  { transform: translateX(40px) scaleX(1); }
-                                        99%  { transform: translateX(-40px) scaleX(1); }
-                                        100% { transform: translateX(-40px) scaleX(-1); }
-                                    }
-                                    @keyframes wave {
-                                        0%   { transform: translateX(0); }
-                                        100% { transform: translateX(-50%); }
-                                    }
-                                    .swimmer { animation: swim 2s ease-in-out infinite; display:inline-block; font-size:2em; }
-                                    .wave-wrap { overflow:hidden; width:120px; }
-                                    .wave-txt { animation: wave 1.2s linear infinite; white-space:nowrap; font-size:1em; color:#3b82f6; }
-                                </style>
-                                <div style="display:flex;flex-direction:column;align-items:center;gap:8px;">
-                                    <div class="swimmer">🏊‍♂️</div>
-                                    <div class="wave-wrap"><div class="wave-txt">〰〰〰〰〰〰〰〰</div></div>
-                                </div>
-                            '''),
-                            min_height="200px", width="100%",
-                        ),
+                    rx.text("Filles", font_size="0.8em", font_weight="bold", color=rx.color("gray", 10), padding_x="1em", padding_top="0.5em"),
+                    rx.vstack(
+                        *[swimmer_card(k, v) for k, v in sorted(
+                            ((k, v) for k, v in SWIMMERS.items() if v["gender"] == "F"),
+                            key=lambda x: x[1]["birth_year"], reverse=True
+                        )],
+                        spacing="2", width="100%", padding_x="1em",
                     ),
-                    width="100%", align_items="start", spacing="1",
+                    spacing="2", width="100%", padding_y="1em",
                 ),
-                rx.text(State.last_up_display, font_size="0.7em", color=rx.color("gray", 10)),
-                spacing="5", padding="1.2em",
-                width=["98%", "420px"],
+                width=["100%", "420px"], spacing="0",
             ),
-            # ── Page détail nage ─────────────────────────────────────
-            rx.vstack(
-                rx.button(
-                    rx.hstack(rx.icon(tag="chevron-left"), rx.text("Retour")),
-                    on_click=State.nav_back, variant="ghost", color_scheme="blue",
-                ),
-                rx.hstack(
-                    rx.heading(f"{State.selected_nage} ({State.current_bassin})", size="4", color=rx.color("gray", 12)),
-                    rx.spacer(),
-                    rx.color_mode.button(variant="ghost"),
-                    width="100%", align="center",
-                ),
-                rx.segmented_control.root(
-                        rx.segmented_control.item("25m", value="25m"),
-                        rx.segmented_control.item("50m", value="50m"),
-                        on_change=State.change_bassin, value=State.current_bassin, width="100%",
-                    ),
-                rx.hstack(
-                    rx.badge(f"RECORD : {State.best_time_val}", color_scheme="blue", variant="solid", size="3", flex_grow="1"),
-                    width="100%",
-                ),
-                # ── Classements ──────────────────────────────────────
+            rx.cond(
+                State.selected_nage == "",
+                # ── PAGE NAGEUR : liste des nages ────────────────────
                 rx.vstack(
-                    rx.text(State.ranking_title, font_size="0.72em", font_weight="bold", color=rx.color("gray", 11)),
-                    rx.tabs.root(
-                        rx.tabs.list(
-                            rx.tabs.trigger(State.current_category, value="cat", flex_grow="1"),
-                            rx.tabs.trigger("TC", value="tc", flex_grow="1"),
+                    header_nageur(),
+                    rx.vstack(
+                        rx.vstack(
+                            rx.text("Bassin", style=l_style),
+                            rx.segmented_control.root(
+                                rx.segmented_control.item("25m", value="25m"),
+                                rx.segmented_control.item("50m", value="50m"),
+                                on_change=State.change_bassin, value=State.current_bassin, width="100%",
+                            ),
+                            width="100%", align_items="start", spacing="0",
+                        ),
+                        rx.vstack(
+                            rx.text("Nage", style=l_style),
+                            rx.cond(
+                                State.available_nages.length() > 0,
+                                rx.vstack(
+                                    rx.grid(rx.foreach(State.nages_nl,  lambda n: rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%")), columns="2", spacing="2", width="100%"),
+                                    rx.divider(),
+                                    rx.grid(rx.foreach(State.nages_bra, lambda n: rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%")), columns="2", spacing="2", width="100%"),
+                                    rx.divider(),
+                                    rx.grid(rx.foreach(State.nages_pap, lambda n: rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%")), columns="2", spacing="2", width="100%"),
+                                    rx.divider(),
+                                    rx.grid(rx.foreach(State.nages_dos, lambda n: rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%")), columns="2", spacing="2", width="100%"),
+                                    rx.divider(),
+                                    rx.grid(rx.foreach(State.nages_4n,  lambda n: rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%")), columns="2", spacing="2", width="100%"),
+                                    spacing="2", width="100%",
+                                ),
+                                rx.center(
+                                    rx.html('''
+                                        <style>
+                                            @keyframes swim {
+                                                0%   { transform: translateX(-40px) scaleX(-1); }
+                                                49%  { transform: translateX(40px) scaleX(-1); }
+                                                50%  { transform: translateX(40px) scaleX(1); }
+                                                99%  { transform: translateX(-40px) scaleX(1); }
+                                                100% { transform: translateX(-40px) scaleX(-1); }
+                                            }
+                                            @keyframes wave {
+                                                0%   { transform: translateX(0); }
+                                                100% { transform: translateX(-50%); }
+                                            }
+                                            .swimmer { animation: swim 2s ease-in-out infinite; display:inline-block; font-size:2em; }
+                                            .wave-wrap { overflow:hidden; width:120px; }
+                                            .wave-txt { animation: wave 1.2s linear infinite; white-space:nowrap; font-size:1em; color:#3b82f6; }
+                                        </style>
+                                        <div style="display:flex;flex-direction:column;align-items:center;gap:8px;">
+                                            <div class="swimmer">🏊‍♂️</div>
+                                            <div class="wave-wrap"><div class="wave-txt">〰〰〰〰〰〰〰〰</div></div>
+                                        </div>
+                                    '''),
+                                    min_height="200px", width="100%",
+                                ),
+                            ),
+                            width="100%", align_items="start", spacing="1",
+                        ),
+                        rx.text(State.last_up_display, font_size="0.7em", color=rx.color("gray", 10)),
+                        spacing="4", padding="1em", width="100%",
+                    ),
+                    width=["100%", "420px"], spacing="0",
+                ),
+                # ── PAGE NAGE : détail ───────────────────────────────
+                rx.vstack(
+                    header_nage(),
+                    rx.vstack(
+                        rx.hstack(
+                            rx.heading(State.selected_nage + " (" + State.current_bassin + ")", size="4", color=rx.color("gray", 12)),
+                            rx.spacer(),
+                            width="100%", align="center",
+                        ),
+                        rx.segmented_control.root(
+                            rx.segmented_control.item("25m", value="25m"),
+                            rx.segmented_control.item("50m", value="50m"),
+                            on_change=State.change_bassin, value=State.current_bassin, width="100%",
+                        ),
+                        rx.hstack(
+                            rx.badge("RECORD : " + State.best_time_val, color_scheme="blue", variant="solid", size="3", flex_grow="1"),
                             width="100%",
                         ),
-                        # Onglet par catégorie
-                        rx.tabs.content(
-                            rx.hstack(
-                                rx.vstack(
-                                    rx.hstack(rx.html('<svg width="16" height="11" viewBox="0 0 3 2" style="display:inline-block;vertical-align:middle;border-radius:1px;"><rect width="1" height="2" fill="#002395"/><rect width="1" height="2" x="1" fill="#fff"/><rect width="1" height="2" x="2" fill="#ed2939"/></svg>'), rx.text("France", font_size="0.7em", color=rx.color("gray", 11)), spacing="1", align="center"),
-                                    rx.text(State.ranking_national_txt, font_size="1em", font_weight="bold", color=rx.color("blue", 9)),
-                                    spacing="0", align_items="center", flex_grow="1", cursor="pointer", on_click=State.open_top10("national"),
+                        # ── Classements ──────────────────────────────
+                        rx.vstack(
+                            rx.text(State.ranking_title, font_size="0.72em", font_weight="bold", color=rx.color("gray", 11)),
+                            rx.cond(
+                                State.is_senior,
+                                # ── Senior : TC uniquement ───────────
+                                rx.hstack(
+                                    rx.vstack(
+                                        rx.hstack(rx.html('<svg width="16" height="11" viewBox="0 0 3 2" style="display:inline-block;vertical-align:middle;border-radius:1px;"><rect width="1" height="2" fill="#002395"/><rect width="1" height="2" x="1" fill="#fff"/><rect width="1" height="2" x="2" fill="#ed2939"/></svg>'), rx.text("France", font_size="0.7em", color=rx.color("gray", 11)), spacing="1", align="center"),
+                                        rx.text(State.ranking_national_tc_txt, font_size="1em", font_weight="bold", color=rx.color("blue", 9)),
+                                        spacing="0", align_items="center", flex_grow="1", cursor="pointer", on_click=State.open_top10("national_tc"),
+                                    ),
+                                    rx.divider(orientation="vertical", height="32px"),
+                                    rx.vstack(
+                                        rx.hstack(rx.text("🏔", font_size="0.8em"), rx.text("AURA", font_size="0.7em", color=rx.color("gray", 11)), spacing="1", align="center"),
+                                        rx.text(State.ranking_region_tc_txt, font_size="1em", font_weight="bold", color=rx.color("green", 9)),
+                                        spacing="0", align_items="center", flex_grow="1", cursor="pointer", on_click=State.open_top10("region_tc"),
+                                    ),
+                                    rx.divider(orientation="vertical", height="32px"),
+                                    rx.vstack(
+                                        rx.hstack(rx.text("📍", font_size="0.8em"), rx.text("Isère", font_size="0.7em", color=rx.color("gray", 11)), spacing="1", align="center"),
+                                        rx.text(State.ranking_dept_tc_txt, font_size="1em", font_weight="bold", color=rx.color("orange", 9)),
+                                        spacing="0", align_items="center", flex_grow="1", cursor="pointer", on_click=State.open_top10("dept_tc"),
+                                    ),
+                                    width="100%", align="center", padding_top="8px",
                                 ),
-                                rx.divider(orientation="vertical", height="32px"),
-                                rx.vstack(
-                                    rx.hstack(rx.text("🏔", font_size="0.8em"), rx.text("AURA", font_size="0.7em", color=rx.color("gray", 11)), spacing="1", align="center"),
-                                    rx.text(State.ranking_region_txt, font_size="1em", font_weight="bold", color=rx.color("green", 9)),
-                                    spacing="0", align_items="center", flex_grow="1", cursor="pointer", on_click=State.open_top10("region"),
+                                # ── Jeune : onglets cat + TC ─────────
+                                rx.tabs.root(
+                                    rx.tabs.list(
+                                        rx.tabs.trigger(State.current_category, value="cat", flex_grow="1"),
+                                        rx.tabs.trigger("TC", value="tc", flex_grow="1"),
+                                        width="100%",
+                                    ),
+                                    rx.tabs.content(
+                                        rx.hstack(
+                                            rx.vstack(
+                                                rx.hstack(rx.html('<svg width="16" height="11" viewBox="0 0 3 2" style="display:inline-block;vertical-align:middle;border-radius:1px;"><rect width="1" height="2" fill="#002395"/><rect width="1" height="2" x="1" fill="#fff"/><rect width="1" height="2" x="2" fill="#ed2939"/></svg>'), rx.text("France", font_size="0.7em", color=rx.color("gray", 11)), spacing="1", align="center"),
+                                                rx.text(State.ranking_national_txt, font_size="1em", font_weight="bold", color=rx.color("blue", 9)),
+                                                spacing="0", align_items="center", flex_grow="1", cursor="pointer", on_click=State.open_top10("national"),
+                                            ),
+                                            rx.divider(orientation="vertical", height="32px"),
+                                            rx.vstack(
+                                                rx.hstack(rx.text("🏔", font_size="0.8em"), rx.text("AURA", font_size="0.7em", color=rx.color("gray", 11)), spacing="1", align="center"),
+                                                rx.text(State.ranking_region_txt, font_size="1em", font_weight="bold", color=rx.color("green", 9)),
+                                                spacing="0", align_items="center", flex_grow="1", cursor="pointer", on_click=State.open_top10("region"),
+                                            ),
+                                            rx.divider(orientation="vertical", height="32px"),
+                                            rx.vstack(
+                                                rx.hstack(rx.text("📍", font_size="0.8em"), rx.text("Isère", font_size="0.7em", color=rx.color("gray", 11)), spacing="1", align="center"),
+                                                rx.text(State.ranking_dept_txt, font_size="1em", font_weight="bold", color=rx.color("orange", 9)),
+                                                spacing="0", align_items="center", flex_grow="1", cursor="pointer", on_click=State.open_top10("dept"),
+                                            ),
+                                            width="100%", align="center", padding_top="8px",
+                                        ),
+                                        value="cat",
+                                    ),
+                                    rx.tabs.content(
+                                        rx.hstack(
+                                            rx.vstack(
+                                                rx.hstack(rx.html('<svg width="16" height="11" viewBox="0 0 3 2" style="display:inline-block;vertical-align:middle;border-radius:1px;"><rect width="1" height="2" fill="#002395"/><rect width="1" height="2" x="1" fill="#fff"/><rect width="1" height="2" x="2" fill="#ed2939"/></svg>'), rx.text("France", font_size="0.7em", color=rx.color("gray", 11)), spacing="1", align="center"),
+                                                rx.text(State.ranking_national_tc_txt, font_size="1em", font_weight="bold", color=rx.color("blue", 9)),
+                                                spacing="0", align_items="center", flex_grow="1", cursor="pointer", on_click=State.open_top10("national_tc"),
+                                            ),
+                                            rx.divider(orientation="vertical", height="32px"),
+                                            rx.vstack(
+                                                rx.hstack(rx.text("🏔", font_size="0.8em"), rx.text("AURA", font_size="0.7em", color=rx.color("gray", 11)), spacing="1", align="center"),
+                                                rx.text(State.ranking_region_tc_txt, font_size="1em", font_weight="bold", color=rx.color("green", 9)),
+                                                spacing="0", align_items="center", flex_grow="1", cursor="pointer", on_click=State.open_top10("region_tc"),
+                                            ),
+                                            rx.divider(orientation="vertical", height="32px"),
+                                            rx.vstack(
+                                                rx.hstack(rx.text("📍", font_size="0.8em"), rx.text("Isère", font_size="0.7em", color=rx.color("gray", 11)), spacing="1", align="center"),
+                                                rx.text(State.ranking_dept_tc_txt, font_size="1em", font_weight="bold", color=rx.color("orange", 9)),
+                                                spacing="0", align_items="center", flex_grow="1", cursor="pointer", on_click=State.open_top10("dept_tc"),
+                                            ),
+                                            width="100%", align="center", padding_top="8px",
+                                        ),
+                                        value="tc",
+                                    ),
+                                    default_value="cat", width="100%",
                                 ),
-                                rx.divider(orientation="vertical", height="32px"),
-                                rx.vstack(
-                                    rx.hstack(rx.text("📍", font_size="0.8em"), rx.text("Isère", font_size="0.7em", color=rx.color("gray", 11)), spacing="1", align="center"),
-                                    rx.text(State.ranking_dept_txt, font_size="1em", font_weight="bold", color=rx.color("orange", 9)),
-                                    spacing="0", align_items="center", flex_grow="1", cursor="pointer", on_click=State.open_top10("dept"),
-                                ),
-                                width="100%", align="center", padding_top="8px",
                             ),
-                            value="cat",
+                            spacing="1", align_items="start",
+                            width="100%", padding="8px 12px",
+                            border_radius="8px",
+                            background_color=rx.color("gray", 2),
+                            border="1px solid var(--gray-4)",
                         ),
-                        # Onglet toutes catégories
-                        rx.tabs.content(
-                            rx.hstack(
-                                rx.vstack(
-                                    rx.hstack(rx.html('<svg width="16" height="11" viewBox="0 0 3 2" style="display:inline-block;vertical-align:middle;border-radius:1px;"><rect width="1" height="2" fill="#002395"/><rect width="1" height="2" x="1" fill="#fff"/><rect width="1" height="2" x="2" fill="#ed2939"/></svg>'), rx.text("France", font_size="0.7em", color=rx.color("gray", 11)), spacing="1", align="center"),
-                                    rx.text(State.ranking_national_tc_txt, font_size="1em", font_weight="bold", color=rx.color("blue", 9)),
-                                    spacing="0", align_items="center", flex_grow="1", cursor="pointer", on_click=State.open_top10("national_tc"),
-                                ),
-                                rx.divider(orientation="vertical", height="32px"),
-                                rx.vstack(
-                                    rx.hstack(rx.text("🏔", font_size="0.8em"), rx.text("AURA", font_size="0.7em", color=rx.color("gray", 11)), spacing="1", align="center"),
-                                    rx.text(State.ranking_region_tc_txt, font_size="1em", font_weight="bold", color=rx.color("green", 9)),
-                                    spacing="0", align_items="center", flex_grow="1", cursor="pointer", on_click=State.open_top10("region_tc"),
-                                ),
-                                rx.divider(orientation="vertical", height="32px"),
-                                rx.vstack(
-                                    rx.hstack(rx.text("📍", font_size="0.8em"), rx.text("Isère", font_size="0.7em", color=rx.color("gray", 11)), spacing="1", align="center"),
-                                    rx.text(State.ranking_dept_tc_txt, font_size="1em", font_weight="bold", color=rx.color("orange", 9)),
-                                    spacing="0", align_items="center", flex_grow="1", cursor="pointer", on_click=State.open_top10("dept_tc"),
-                                ),
-                                width="100%", align="center", padding_top="8px",
-                            ),
-                            value="tc",
-                        ),
-                        default_value="cat", width="100%",
-                    ),
-                    spacing="1", align_items="start",
-                    width="100%",
-                    padding="8px 12px",
-                    border_radius="8px",
-                    background_color=rx.color("gray", 2),
-                    border="1px solid var(--gray-4)",
-                ),
-                # ── Qualifications ───────────────────────────────────
-                rx.cond(
-                    State.qualif_rows.length() > 0,
-                    rx.vstack(
-                        rx.text("Qualifications", font_size="0.72em", font_weight="bold", color=rx.color("gray", 11)),
-                        rx.foreach(State.qualif_rows, qualif_row_ui),
-                        spacing="1", align_items="start",
-                        width="100%",
-                        padding="8px 12px",
-                        border_radius="8px",
-                        background_color=rx.color("gray", 2),
-                        border="1px solid var(--gray-4)",
-                    ),
-                ),
-                rx.table.root(
-                    rx.table.header(
-                        rx.table.row(
-                            rx.table.column_header_cell("Date"),
-                            rx.table.column_header_cell("Temps"),
-                            rx.table.column_header_cell("Pts"),
-                        ),
-                    ),
-                    rx.table.body(
-                        rx.foreach(
-                            State.filtered_data,
-                            lambda r: rx.table.row(
-                                rx.table.cell(r.D),
-                                rx.table.cell(rx.text(r.T, font_weight=rx.cond(r.T == State.best_time_val, "bold", "normal"), color=rx.cond(r.T == State.best_time_val, rx.color("blue", 9), rx.color("gray", 12)))),
-                                rx.table.cell(rx.text(r.P, color=rx.color("gray", 11))),
-                                cursor="pointer",
-                                _hover={"background_color": "var(--gray-3)"},
-                                on_click=State.open_dialog(r.D + r.T, r.N, r.V, r.D),
+                        # ── Qualifications ───────────────────────────
+                        rx.cond(
+                            State.qualif_rows.length() > 0,
+                            rx.vstack(
+                                rx.text("Qualifications", font_size="0.72em", font_weight="bold", color=rx.color("gray", 11)),
+                                rx.foreach(State.qualif_rows, qualif_row_ui),
+                                spacing="1", align_items="start",
+                                width="100%", padding="8px 12px",
+                                border_radius="8px",
+                                background_color=rx.color("gray", 2),
+                                border="1px solid var(--gray-4)",
                             ),
                         ),
+                        rx.table.root(
+                            rx.table.header(
+                                rx.table.row(
+                                    rx.table.column_header_cell("Date"),
+                                    rx.table.column_header_cell("Temps"),
+                                    rx.table.column_header_cell("Pts"),
+                                ),
+                            ),
+                            rx.table.body(
+                                rx.foreach(
+                                    State.filtered_data,
+                                    lambda r: rx.table.row(
+                                        rx.table.cell(r.D),
+                                        rx.table.cell(rx.text(r.T, font_weight=rx.cond(r.T == State.best_time_val, "bold", "normal"), color=rx.cond(r.T == State.best_time_val, rx.color("blue", 9), rx.color("gray", 12)))),
+                                        rx.table.cell(rx.text(r.P, color=rx.color("gray", 11))),
+                                        cursor="pointer",
+                                        _hover={"background_color": "var(--gray-3)"},
+                                        on_click=State.open_dialog(r.D + r.T, r.N, r.V, r.D),
+                                    ),
+                                ),
+                            ),
+                            width="100%", size="1", variant="surface",
+                        ),
+                        rx.box(
+                            rx.plotly(data=State.plot_fig, config={"displayModeBar": False, "responsive": True}, width="100%"),
+                            width="100%", border="1px solid var(--gray-4)",
+                            border_radius="12px", overflow="hidden", padding_y="10px",
+                        ),
+                        spacing="4", padding="0.8em", width="100%", padding_bottom="5em",
                     ),
-                    width="100%", size="1", variant="surface",
+                    width=["100%", "420px"], spacing="0",
                 ),
-                rx.box(
-                    rx.plotly(data=State.plot_fig, config={"displayModeBar": False, "responsive": True}, width="100%"),
-                    width="100%", border="1px solid var(--gray-4)",
-                    border_radius="12px", overflow="hidden", padding_y="10px",
-                ),
-                spacing="4", width=["98%", "500px"], padding="0.8em", margin_bottom="5em",
             ),
         ),
         min_height="0",
@@ -1256,11 +1497,12 @@ def index():
 app = rx.App(
     theme=rx.theme(appearance="inherit"),
     head_components=[
+        rx.el.style("html { overflow-y: scroll; }"),
         rx.el.link(rel="icon", type="image/png", href="/icon.png"),
         rx.el.link(rel="apple-touch-icon", sizes="512x512", href="/icon.png"),
         rx.el.meta(name="apple-mobile-web-app-capable", content="yes"),
         rx.el.meta(name="apple-mobile-web-app-status-bar-style", content="default"),
-        rx.el.meta(name="apple-mobile-web-app-title", content=f"{SWIMMER_NAME} Swim"),
+        rx.el.meta(name="apple-mobile-web-app-title", content="PdC Swim"),
         rx.el.meta(name="mobile-web-app-capable", content="yes"),
     ],
 )
