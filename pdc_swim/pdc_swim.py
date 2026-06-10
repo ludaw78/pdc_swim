@@ -552,6 +552,7 @@ def _fetch_one(args: tuple) -> tuple:
 class State(rx.State):
     # Navigation : "" = accueil, "tristan" = page nageur, "tristan|100 Bra" = page nage
     active_swimmer_key: str = ""
+    loading_init: bool = True  # True jusqu'à la fin de on_load
     current_bassin: str = "50m"
     selected_nage_state: str = ""
     # Données par nageur — clé = swimmer_key
@@ -593,6 +594,7 @@ class State(rx.State):
         else:
             self.active_swimmer_key = ""
             self.selected_nage_state = ""
+        self.loading_init = False
 
     def on_load_route(self):
         """Lit la clé nageur depuis le path /nageur/[key]."""
@@ -605,6 +607,7 @@ class State(rx.State):
         else:
             self.active_swimmer_key = ""
             self.selected_nage_state = ""
+        self.loading_init = False
         # Injecter le manifest spécifique au nageur
         return rx.call_script(
             f"var l=document.querySelector('link[rel=manifest]');"
@@ -745,6 +748,8 @@ class State(rx.State):
         best = self.best_time_val
         rows = []
         for niveau, picto, label in NIVEAUX_QUALIF:
+            if niveau == "france_u18" and age > 18:
+                continue
             idx = NIVEAU_IDX[niveau]
             vals = GRILLES.get(self.swimmer_gender, {}).get(cat_key, {}).get(key, [])
             t_str = vals[idx] if len(vals) > idx else ""
@@ -1265,6 +1270,9 @@ def index():
         splits_dialog(),
         top10_dialog(),
         rx.cond(
+            State.loading_init,
+            rx.center(rx.spinner(size="3"), min_height="100vh"),
+            rx.cond(
             State.active_swimmer_key == "",
             # ── PAGE ACCUEIL : grille nageurs ────────────────────────
             rx.vstack(
@@ -1505,6 +1513,7 @@ def index():
                     ),
                     width=["100%", "420px"], spacing="0",
                 ),
+            ),
             ),
         ),
         min_height="0",
