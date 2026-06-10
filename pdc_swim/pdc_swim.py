@@ -98,8 +98,10 @@ def parse_row(row: str, base_url: str = "https://ffn.extranat.fr") -> Optional[P
     tds = find_all(r"<td[^>]*>(.*?)</td>", row)
     if len(tds) < 8: return None
     tippy_matches = re.findall(r'data-tippy-content="((?:[^"\\]|\\.)*)"', tds[0], re.DOTALL)
+    if not tippy_matches:
+        tippy_matches = re.findall(r"data-tippy-content='((?:[^'\\]|\\.)*)'", tds[0], re.DOTALL)
     raw_tippy = tippy_matches[0] if tippy_matches else None
-    splits = parse_splits(raw_tippy.replace("\\'", "'")) if raw_tippy else []
+    splits = parse_splits(raw_tippy.replace("\\\\'", "'").replace("\\'", "'")) if raw_tippy else []
     ps = find_all(r"<p[^>]*>(.*?)</p>", tds[3])
     lien_href = find_one(r'href=["\']([^"\']+)["\']', tds[6])
     return Performance(
