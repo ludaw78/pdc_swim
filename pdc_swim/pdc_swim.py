@@ -439,10 +439,10 @@ def parse_ranking_row(html_content: str, swimmer_id: str) -> dict:
     all_tippies = re.findall(r'data-tippy-content="((?:[^"\\]|\\.)*)"', target_row, re.DOTALL)
     if not all_tippies:
         all_tippies = re.findall(r"data-tippy-content='((?:[^'\\]|\\.)*)'", target_row, re.DOTALL)
-    raw_tippy = next((t for t in all_tippies if "Rang" in html.unescape(t.replace("\\'", "'"))), None)
+    raw_tippy = next((t for t in all_tippies if "Rang" in html.unescape(t.replace("\\\\'", "'").replace("\\'", "'"))), None)
     if not raw_tippy:
         return result
-    tippy = html.unescape(raw_tippy.replace("\\'", "'"))
+    tippy = html.unescape(raw_tippy.replace("\\\\'", "'").replace("\\'", "'"))
 
     def extract_rank(pattern):
         m = re.search(pattern, tippy, re.DOTALL)
@@ -551,6 +551,22 @@ def _fetch_perf(args: tuple) -> list:
                 "N": perf.competition, "V": perf.type_compet,
             })
     return perfs
+
+def _fetch_one(args: tuple) -> tuple:
+    bc, bl, epr_name, idepr, sai, cat, scope, ffn_id = args
+    if cat > 18:
+        base = f"https://ffn.extranat.fr/webffn/nat_rankings.php?idact=nat&idopt=sai&go=epr&idbas={bc}&idepr={idepr}&idsai={sai}"
+    else:
+        base = f"https://ffn.extranat.fr/webffn/nat_rankings.php?idact=nat&idopt=sai&go=epr&idbas={bc}&idepr={idepr}&idsai={sai}&idcat={cat}"
+    suffix = {"dept": "&iddep=1611", "region": "&idreg=3004", "national": ""}[scope]
+    try:
+        h = _fetch_url(base + suffix)
+        rank = parse_ranking_row(h, ffn_id) if scope == "dept" else None
+        top  = parse_top10(h, ffn_id)
+        return (bl, epr_name, scope, rank, top)
+    except:
+        fallback_rank = {"dept": "-", "region": "-", "national": "-"} if scope == "dept" else None
+        return (bl, epr_name, scope, fallback_rank, [])
     bc, bl, epr_name, idepr, sai, cat, scope, ffn_id = args
     if cat > 18:
         base = f"https://ffn.extranat.fr/webffn/nat_rankings.php?idact=nat&idopt=sai&go=epr&idbas={bc}&idepr={idepr}&idsai={sai}"
