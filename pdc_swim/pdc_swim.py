@@ -97,8 +97,9 @@ def parse_row(row: str, base_url: str = "https://ffn.extranat.fr") -> Optional[P
     if not th: return None
     tds = find_all(r"<td[^>]*>(.*?)</td>", row)
     if len(tds) < 8: return None
-    tippy_match = re.search(r'data-tippy-content=[\'"]([^\'"]*)[\'"]', tds[0])
-    splits = parse_splits(tippy_match.group(1)) if tippy_match else []
+    tippy_matches = re.findall(r'data-tippy-content="((?:[^"\\]|\\.)*)"', tds[0], re.DOTALL)
+    raw_tippy = tippy_matches[0] if tippy_matches else None
+    splits = parse_splits(raw_tippy.replace("\\'", "'")) if raw_tippy else []
     ps = find_all(r"<p[^>]*>(.*?)</p>", tds[3])
     lien_href = find_one(r'href=["\']([^"\']+)["\']', tds[6])
     return Performance(
@@ -417,12 +418,16 @@ EPREUVE_CODES = {
 def current_season_year() -> int:
     return datetime.now().year
 
-def grille_qualif_full(gender: str) -> dict:
-    """GRILLE_QUALIF_FULL calculée dynamiquement selon le genre du nageur actif."""
-    return {
+GRILLE_QUALIF_FULL = {
+    gender: {
         cat: {epr: GRILLES[gender][cat][epr][4] for epr in GRILLES[gender][cat]}
         for cat in GRILLES[gender] if cat in ["U14","U15","U16","U17","U18"]
     }
+    for gender in ["M", "F"]
+}
+
+def grille_qualif_full(gender: str) -> dict:
+    return GRILLE_QUALIF_FULL.get(gender, {})
 
 def parse_ranking_row(html_content: str, swimmer_id: str) -> dict:
     result = {"dept": "-", "region": "-", "national": "-",
@@ -523,7 +528,7 @@ def _fetch_url(url: str, retries: int = 2) -> str:
     for attempt in range(retries + 1):
         try:
             req = urllib.request.Request(url, headers=headers)
-            with opener.open(req, timeout=15) as resp:
+            with opener.open(req, timeout=8) as resp:
                 return resp.read().decode("utf-8", errors="replace")
         except Exception as e:
             last_exc = e
@@ -531,7 +536,21 @@ def _fetch_url(url: str, retries: int = 2) -> str:
                 time.sleep(1)
     raise last_exc
 
-def _fetch_one(args: tuple) -> tuple:
+def _fetch_perf(args: tuple) -> list:
+    """Fetch des performances pour un bassin donné (fonction module-level pour ThreadPoolExecutor)."""
+    bc, bl, ffn_id = args
+    url = f"https://ffn.extranat.fr/webffn/nat_recherche.php?idact=nat&idrch_id={ffn_id}&idopt=prf&idbas={bc}"
+    html_content = _fetch_url(url)
+    perfs = []
+    for row in find_all(r"<tr\b[^>]*class=[^>]*border-b[^>]*>(.*?)</tr>", html_content):
+        perf = parse_row(row)
+        if perf:
+            perfs.append({
+                "E": perf.epreuve, "T": perf.temps_final, "P": perf.points,
+                "D": perf.date, "B": bl, "S": encode_splits(perf.splits),
+                "N": perf.competition, "V": perf.type_compet,
+            })
+    return perfs
     bc, bl, epr_name, idepr, sai, cat, scope, ffn_id = args
     if cat > 18:
         base = f"https://ffn.extranat.fr/webffn/nat_rankings.php?idact=nat&idopt=sai&go=epr&idbas={bc}&idepr={idepr}&idsai={sai}"
@@ -552,7 +571,6 @@ def _fetch_one(args: tuple) -> tuple:
 class State(rx.State):
     # Navigation : "" = accueil, "tristan" = page nageur, "tristan|100 Bra" = page nage
     active_swimmer_key: str = ""
-    loading_init: bool = True  # True jusqu'à la fin de on_load
     current_bassin: str = "50m"
     selected_nage_state: str = ""
     # Données par nageur — clé = swimmer_key
@@ -594,7 +612,6 @@ class State(rx.State):
         else:
             self.active_swimmer_key = ""
             self.selected_nage_state = ""
-        self.loading_init = False
 
     def on_load_route(self):
         """Lit la clé nageur depuis le path /nageur/[key]."""
@@ -607,7 +624,6 @@ class State(rx.State):
         else:
             self.active_swimmer_key = ""
             self.selected_nage_state = ""
-        self.loading_init = False
         # Injecter le manifest spécifique au nageur
         return rx.call_script(
             f"var l=document.querySelector('link[rel=manifest]');"
@@ -619,8 +635,9 @@ class State(rx.State):
 
     @rx.var(cache=True)
     def swimmer(self) -> dict:
-        key = self.active_swimmer_key if self.active_swimmer_key in SWIMMERS else DEFAULT_SWIMMER
-        return SWIMMERS[key]
+        if self.active_swimmer_key not in SWIMMERS:
+            return {"name": "", "ffn_id": "", "gender": "M", "birth_year": 2000, "photo": ""}
+        return SWIMMERS[self.active_swimmer_key]
 
     @rx.var(cache=True)
     def swimmer_name(self) -> str:
@@ -645,28 +662,38 @@ class State(rx.State):
     # ── Données actives ───────────────────────────────────────────────────────
 
     @rx.var(cache=True)
-    def results_json(self) -> str:
+    def active_results(self) -> list:
         try:
-            d = json.loads(self.all_results_json)
-            return json.dumps(d.get(self.active_swimmer_key, []))
+            return json.loads(self.all_results_json).get(self.active_swimmer_key, [])
         except:
-            return "[]"
+            return []
+
+    @rx.var(cache=True)
+    def active_rankings(self) -> dict:
+        try:
+            return json.loads(self.all_rankings_json).get(self.active_swimmer_key, {})
+        except:
+            return {}
+
+    @rx.var(cache=True)
+    def active_top10(self) -> dict:
+        try:
+            return json.loads(self.all_top10_json).get(self.active_swimmer_key, {})
+        except:
+            return {}
+
+    # Conservées pour compatibilité avec le reste du code
+    @rx.var(cache=True)
+    def results_json(self) -> str:
+        return json.dumps(self.active_results)
 
     @rx.var(cache=True)
     def rankings_json(self) -> str:
-        try:
-            d = json.loads(self.all_rankings_json)
-            return json.dumps(d.get(self.active_swimmer_key, {}))
-        except:
-            return "{}"
+        return json.dumps(self.active_rankings)
 
     @rx.var(cache=True)
     def top10_json(self) -> str:
-        try:
-            d = json.loads(self.all_top10_json)
-            return json.dumps(d.get(self.active_swimmer_key, {}))
-        except:
-            return "{}"
+        return json.dumps(self.active_top10)
 
     @rx.var(cache=True)
     def last_up_display(self) -> str:
@@ -687,7 +714,6 @@ class State(rx.State):
         self.selected_nage_state = ""
         self.current_bassin = "50m"
         return rx.call_script(f"window.history.replaceState(null, '', '?nageur={key}')")
-
 
     def nav_to_accueil(self):
         self.active_swimmer_key = ""
@@ -912,25 +938,9 @@ class State(rx.State):
             all_top10    = json.loads(self.all_top10_json)    if self.all_top10_json    not in ("{}", "") else {}
             all_upd      = json.loads(self.all_last_update)   if self.all_last_update   not in ("{}", "") else {}
 
-            # ── 1. Performances 25m + 50m en parallèle ───────────────
-            def fetch_perf(args):
-                bc, bl = args
-                url = f"https://ffn.extranat.fr/webffn/nat_recherche.php?idact=nat&idrch_id={ffn_id}&idopt=prf&idbas={bc}"
-                html_content = _fetch_url(url)
-                perfs = []
-                for row in find_all(r"<tr\b[^>]*class=[^>]*border-b[^>]*>(.*?)</tr>", html_content):
-                    perf = parse_row(row)
-                    if perf:
-                        perfs.append({
-                            "E": perf.epreuve, "T": perf.temps_final, "P": perf.points,
-                            "D": perf.date, "B": bl, "S": encode_splits(perf.splits),
-                            "N": perf.competition, "V": perf.type_compet,
-                        })
-                return perfs
-
-            new_res = []
+            # ── 1. Performances 25m + 50m en parallèle ───────────────            new_res = []
             with ThreadPoolExecutor(max_workers=2) as ex:
-                futures_perf = [ex.submit(fetch_perf, args) for args in [("25", "25m"), ("50", "50m")]]
+                futures_perf = [ex.submit(_fetch_perf, (bc, bl, ffn_id)) for bc, bl in [("25", "25m"), ("50", "50m")]]
                 for f in futures_perf:
                     try:
                         new_res.extend(f.result(timeout=20))
@@ -1020,13 +1030,13 @@ class State(rx.State):
         try:
             h = _fetch_url(url)
             top = parse_top10(h, ffn_id)
-            all_top10[f"{nage}|{bl}|{scope}"] = top
         except:
-            all_top10[f"{nage}|{bl}|{scope}"] = []
+            top = []
 
-        # Sauvegarder dans le store multi-nageurs
         all_top10_store = json.loads(self.all_top10_json) if self.all_top10_json not in ("{}", "") else {}
-        all_top10_store[self.active_swimmer_key] = all_top10
+        nageur_top10 = all_top10_store.get(self.active_swimmer_key, {})
+        nageur_top10[f"{nage}|{bl}|{scope}"] = top
+        all_top10_store[self.active_swimmer_key] = nageur_top10
         self.all_top10_json = json.dumps(all_top10_store)
         self.top10_loading = False
 
@@ -1270,9 +1280,6 @@ def index():
         splits_dialog(),
         top10_dialog(),
         rx.cond(
-            State.loading_init,
-            rx.center(rx.spinner(size="3"), min_height="100vh"),
-            rx.cond(
             State.active_swimmer_key == "",
             # ── PAGE ACCUEIL : grille nageurs ────────────────────────
             rx.vstack(
@@ -1513,7 +1520,6 @@ def index():
                     ),
                     width=["100%", "420px"], spacing="0",
                 ),
-            ),
             ),
         ),
         min_height="0",
