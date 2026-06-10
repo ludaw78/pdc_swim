@@ -938,7 +938,8 @@ class State(rx.State):
             all_top10    = json.loads(self.all_top10_json)    if self.all_top10_json    not in ("{}", "") else {}
             all_upd      = json.loads(self.all_last_update)   if self.all_last_update   not in ("{}", "") else {}
 
-            # ── 1. Performances 25m + 50m en parallèle ───────────────            new_res = []
+            # ── 1. Performances 25m + 50m en parallèle ───────────────
+            new_res = []
             with ThreadPoolExecutor(max_workers=2) as ex:
                 futures_perf = [ex.submit(_fetch_perf, (bc, bl, ffn_id)) for bc, bl in [("25", "25m"), ("50", "50m")]]
                 for f in futures_perf:
