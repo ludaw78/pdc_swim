@@ -1524,6 +1524,7 @@ def index():
 app = rx.App(
     theme=rx.theme(appearance="inherit"),
     head_components=[
+        rx.el.title("PdC Swim"),
         rx.el.style("html { overflow-y: scroll; }"),
         rx.el.link(rel="icon", type="image/png", href="/icon.png"),
         rx.el.link(rel="apple-touch-icon", sizes="512x512", href="/icon.png"),
