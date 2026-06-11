@@ -920,48 +920,44 @@ class State(rx.State):
         return result
 
     @rx.var(cache=True)
-    def chart_step(self) -> int:
-        """Pas Y adapté à l'amplitude des données."""
+    def chart_config(self) -> dict:
+        """Calcul atomique de step/min/max/ticks pour le graphe."""
         d = self.chart_data
-        if not d: return 2
+        if not d: return {"step": 2, "min": 0, "max": 10, "ticks": []}
         mn_raw = min(r["secs"] for r in d)
         mx_raw = max(r["secs"] for r in d)
-        amp = mx_raw - mn_raw
-        if amp <= 5:   return 1
-        if amp <= 15:  return 2
-        if amp <= 30:  return 5
-        if amp <= 60:  return 10
-        if amp <= 120: return 20
-        return 30
+        amp = mx_raw - mn_raw if mx_raw > mn_raw else 1
+        step = 1
+        for s in [1, 2, 5, 10, 15, 20, 30, 60]:
+            if amp / s <= 7:
+                step = s
+                break
+        y_min = max(0, (int(mn_raw) // step) * step)
+        y_max = (int(mx_raw) // step + 1) * step
+        ticks = list(range(y_min, y_max + step, step))
+        return {"step": step, "min": y_min, "max": y_max, "ticks": ticks}
+
+    @rx.var(cache=True)
+    def chart_step(self) -> int:
+        return self.chart_config.get("step", 2)
 
     @rx.var(cache=True)
     def chart_y_min(self) -> int:
-        d = self.chart_data
-        if not d: return 0
-        raw = min(r["secs"] for r in d)
-        step = self.chart_step
-        return max(0, (int(raw) // step) * step - step)
+        return self.chart_config.get("min", 0)
 
     @rx.var(cache=True)
     def chart_y_max(self) -> int:
-        d = self.chart_data
-        if not d: return 100
-        raw = max(r["secs"] for r in d)
-        step = self.chart_step
-        return ((int(raw) // step) + 2) * step
+        return self.chart_config.get("max", 100)
 
     @rx.var(cache=True)
     def chart_ticks(self) -> list[dict]:
-        mn, mx, step = self.chart_y_min, self.chart_y_max, self.chart_step
-        if mn >= mx: return []
-        ticks = []
-        v = mn
-        while v <= mx:
+        ticks = self.chart_config.get("ticks", [])
+        result = []
+        for v in ticks:
             m = int(v // 60); s = v % 60
-            label = f"{m}:{s:02d}" if m > 0 else f"{s}s"
-            ticks.append({"value": v, "label": label})
-            v += step
-        return ticks
+            label = f"{m:02d}:{s:02d}"
+            result.append({"value": v, "label": label})
+        return result
 
     @rx.var(cache=True)
     def chart_tick_values(self) -> list[int]:
@@ -973,19 +969,30 @@ class State(rx.State):
 
     @rx.var(cache=True)
     def chart_json(self) -> str:
-        return json.dumps(self.chart_data)
+        cfg = self.chart_config
+        return json.dumps({
+            "data": self.chart_data,
+            "min": cfg.get("min", 0),
+            "max": cfg.get("max", 100),
+            "ticks": cfg.get("ticks", []),
+        })
 
     def render_chart(self):
-        data_json = self.chart_json
-        mn = self.chart_y_min
-        mx = self.chart_y_max
+        payload = self.chart_json
         return rx.call_script(
             f"""(function(){{
+  function draw(){{
   var el=document.getElementById('swc');
-  if(!el||!window.Chart){{setTimeout(arguments.callee,100);return;}}
+  if(!el||!window.Chart){{setTimeout(draw,100);return;}}
   if(el._ch){{el._ch.destroy();}}
-  var d={data_json};
-  var fmt=function(v){{var m=Math.floor(v/60);var s=String(Math.round(v%60)).padStart(2,'0');return m>0?m+':'+s:s+'s';}};
+  var p={payload};
+  console.log('chart min/max/ticks:', p.min, p.max, p.ticks);
+  var d=p.data; var mn=p.min; var mx=p.max; var tk=p.ticks;
+  var fmt=function(v){{
+    var m=String(Math.floor(v/60)).padStart(2,'0');
+    var s=String(Math.round(v%60)).padStart(2,'0');
+    return m+':'+s;
+  }};
   el._ch=new Chart(el,{{type:'line',
     data:{{datasets:[{{data:d.map(function(x){{return{{x:x.iso,y:x.secs,label:x.label,lieu:x.lieu,date:x.date,type:x.type}};}})
     ,borderColor:'#3b82f6',borderWidth:2,pointBackgroundColor:'#3b82f6',pointRadius:3,tension:0,pointHoverRadius:5}}]}},
@@ -999,9 +1006,13 @@ class State(rx.State):
       titleFont:{{size:11}},
       bodyFont:{{size:11}}
     }}}},
-    scales:{{y:{{min:{mn},max:{mx},ticks:{{callback:fmt,font:{{size:9}}}},grid:{{color:'#e5e7eb'}}}},
+    scales:{{y:{{min:mn,max:mx,
+      ticks:{{values:tk,callback:fmt,font:{{size:9}},autoSkip:false,maxTicksLimit:20}},
+      afterBuildTicks:function(axis){{axis.ticks=tk.map(function(v){{return{{value:v}};}});}},
+      grid:{{color:'#e5e7eb'}}}},
     x:{{type:'time',time:{{unit:'month',displayFormats:{{month:'MM/yyyy'}}}},ticks:{{font:{{size:9}}}},grid:{{display:false}}}}}}}}
   }});
+  }} draw();
 }})();"""
         )
 
@@ -1444,28 +1455,16 @@ def index():
                                     spacing="2", width="100%",
                                 ),
                                 rx.center(
-                                    rx.html('''
-                                        <style>
-                                            @keyframes swim {
-                                                0%   { transform: translateX(-40px) scaleX(-1); }
-                                                49%  { transform: translateX(40px) scaleX(-1); }
-                                                50%  { transform: translateX(40px) scaleX(1); }
-                                                99%  { transform: translateX(-40px) scaleX(1); }
-                                                100% { transform: translateX(-40px) scaleX(-1); }
-                                            }
-                                            @keyframes wave {
-                                                0%   { transform: translateX(0); }
-                                                100% { transform: translateX(-50%); }
-                                            }
-                                            .swimmer { animation: swim 2s ease-in-out infinite; display:inline-block; font-size:2em; }
-                                            .wave-wrap { overflow:hidden; width:120px; }
-                                            .wave-txt { animation: wave 1.2s linear infinite; white-space:nowrap; font-size:1em; color:#3b82f6; }
-                                        </style>
-                                        <div style="display:flex;flex-direction:column;align-items:center;gap:8px;">
-                                            <div class="swimmer">🏊‍♂️</div>
-                                            <div class="wave-wrap"><div class="wave-txt">〰〰〰〰〰〰〰〰</div></div>
-                                        </div>
-                                    '''),
+                                    rx.vstack(
+                                        rx.text("Pas encore de données", font_size="0.9em", color=rx.color("gray", 10), font_weight="bold"),
+                                        rx.hstack(
+                                            rx.text("Appuyez sur", font_size="0.8em", color=rx.color("gray", 9)),
+                                            rx.icon(tag="refresh-cw", size=14, color=rx.color("gray", 9)),
+                                            rx.text("pour charger", font_size="0.8em", color=rx.color("gray", 9)),
+                                            spacing="1", align="center",
+                                        ),
+                                        spacing="2", align="center",
+                                    ),
                                     min_height="200px", width="100%",
                                 ),
                             ),
@@ -1483,6 +1482,11 @@ def index():
                         rx.hstack(
                             rx.heading(State.selected_nage + " (" + State.current_bassin + ")", size="4", color=rx.color("gray", 12)),
                             rx.spacer(),
+                            rx.button(
+                                rx.hstack(rx.icon(tag="chevron-left", size=16), rx.text("Retour", font_size="0.8em"), spacing="1", align="center"),
+                                on_click=State.nav_back_to_nageur,
+                                variant="ghost", color_scheme="gray", size="1",
+                            ),
                             width="100%", align="center",
                         ),
                         rx.segmented_control.root(
