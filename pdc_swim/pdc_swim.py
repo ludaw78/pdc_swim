@@ -907,19 +907,103 @@ class State(rx.State):
         result = []
         for x in d:
             s = to_sec(x.T)
+            d_iso = datetime.strptime(x.D, "%d/%m/%Y").strftime("%Y-%m-%d")
             result.append({
                 "date": x.D,
+                "month": x.D[3:],
+                "iso": d_iso,
                 "secs": round(s, 2),
                 "label": x.T,
-                "qualif": round(q_secs, 2) if q_secs else None,
+                "lieu": x.N,
+                "type": x.V,
             })
         return result
 
     @rx.var(cache=True)
-    def chart_qualif_label(self) -> str:
-        q = self.qualif_time_val
-        if not q: return ""
-        return f"Qualif. {self.current_category} ({q})"
+    def chart_step(self) -> int:
+        """Pas Y adapté à l'amplitude des données."""
+        d = self.chart_data
+        if not d: return 2
+        mn_raw = min(r["secs"] for r in d)
+        mx_raw = max(r["secs"] for r in d)
+        amp = mx_raw - mn_raw
+        if amp <= 5:   return 1
+        if amp <= 15:  return 2
+        if amp <= 30:  return 5
+        if amp <= 60:  return 10
+        if amp <= 120: return 20
+        return 30
+
+    @rx.var(cache=True)
+    def chart_y_min(self) -> int:
+        d = self.chart_data
+        if not d: return 0
+        raw = min(r["secs"] for r in d)
+        step = self.chart_step
+        return max(0, (int(raw) // step) * step - step)
+
+    @rx.var(cache=True)
+    def chart_y_max(self) -> int:
+        d = self.chart_data
+        if not d: return 100
+        raw = max(r["secs"] for r in d)
+        step = self.chart_step
+        return ((int(raw) // step) + 2) * step
+
+    @rx.var(cache=True)
+    def chart_ticks(self) -> list[dict]:
+        mn, mx, step = self.chart_y_min, self.chart_y_max, self.chart_step
+        if mn >= mx: return []
+        ticks = []
+        v = mn
+        while v <= mx:
+            m = int(v // 60); s = v % 60
+            label = f"{m}:{s:02d}" if m > 0 else f"{s}s"
+            ticks.append({"value": v, "label": label})
+            v += step
+        return ticks
+
+    @rx.var(cache=True)
+    def chart_tick_values(self) -> list[int]:
+        return [int(t["value"]) for t in self.chart_ticks]
+
+    @rx.var(cache=True)
+    def chart_tick_labels(self) -> list[str]:
+        return [t["label"] for t in self.chart_ticks]
+
+    @rx.var(cache=True)
+    def chart_json(self) -> str:
+        return json.dumps(self.chart_data)
+
+    def render_chart(self):
+        data_json = self.chart_json
+        mn = self.chart_y_min
+        mx = self.chart_y_max
+        return rx.call_script(
+            f"""(function(){{
+  var el=document.getElementById('swc');
+  if(!el||!window.Chart){{setTimeout(arguments.callee,100);return;}}
+  if(el._ch){{el._ch.destroy();}}
+  var d={data_json};
+  var fmt=function(v){{var m=Math.floor(v/60);var s=String(Math.round(v%60)).padStart(2,'0');return m>0?m+':'+s:s+'s';}};
+  el._ch=new Chart(el,{{type:'line',
+    data:{{datasets:[{{data:d.map(function(x){{return{{x:x.iso,y:x.secs,label:x.label,lieu:x.lieu,date:x.date,type:x.type}};}})
+    ,borderColor:'#3b82f6',borderWidth:2,pointBackgroundColor:'#3b82f6',pointRadius:3,tension:0,pointHoverRadius:5}}]}},
+    options:{{plugins:{{legend:{{display:false}},tooltip:{{
+      callbacks:{{
+        title:function(items){{var r=items[0].raw;return r.lieu+' ('+r.date+')';}},
+        afterTitle:function(items){{return items[0].raw.type;}},
+        label:function(c){{return 'Temps : '+c.raw.label;}}
+      }},
+      displayColors:false,
+      titleFont:{{size:11}},
+      bodyFont:{{size:11}}
+    }}}},
+    scales:{{y:{{min:{mn},max:{mx},ticks:{{callback:fmt,font:{{size:9}}}},grid:{{color:'#e5e7eb'}}}},
+    x:{{type:'time',time:{{unit:'month',displayFormats:{{month:'MM/yyyy'}}}},ticks:{{font:{{size:9}}}},grid:{{display:false}}}}}}}}
+  }});
+}})();"""
+        )
 
     # ── Classements ───────────────────────────────────────────────────────────
 
@@ -1535,40 +1619,13 @@ def index():
                             width="100%", size="1", variant="surface",
                         ),
                         rx.box(
-                            rx.recharts.responsive_container(
-                                rx.recharts.line_chart(
-                                    rx.recharts.line(
-                                        data_key="secs",
-                                        stroke="#3b82f6",
-                                        stroke_width=2,
-                                        dot={"fill": "#3b82f6", "r": 5, "strokeWidth": 2, "stroke": "white"},
-                                    ),
-                                    rx.recharts.line(
-                                        data_key="qualif",
-                                        stroke="#ef4444",
-                                        stroke_width=2,
-                                        stroke_dasharray="5 5",
-                                        dot=False,
-                                    ),
-                                    rx.recharts.x_axis(data_key="date", tick={"fontSize": 10}, tick_line=False),
-                                    rx.recharts.y_axis(
-                                        tick_formatter=rx.Var.create("(v) => { const m=Math.floor(v/60); const s=Math.round(v%60); return m>0 ? m+':'+String(s).padStart(2,'0') : s+'s'; }"),
-                                        tick={"fontSize": 10},
-                                        tick_line=False,
-                                        width=45,
-                                    ),
-                                    rx.recharts.graphing_tooltip(
-                                        formatter=rx.Var.create("(v, n, p) => [p.payload.label, '']"),
-                                        label_formatter=rx.Var.create("(l) => l"),
-                                    ),
-                                    data=State.chart_data,
-                                    margin={"top": 10, "right": 10, "left": 0, "bottom": 0},
-                                ),
-                                width="100%",
-                                height=230,
+                            rx.el.canvas(
+                                id="swc",
+                                style={"width": "100%", "height": "220px"},
+                                on_mount=State.render_chart,
                             ),
                             width="100%", border="1px solid var(--gray-4)",
-                            border_radius="12px", overflow="hidden", padding_y="10px",
+                            border_radius="12px", overflow="hidden", padding="10px",
                         ),
                         spacing="4", padding="0.8em", width="100%", padding_bottom="5em",
                     ),
@@ -1585,6 +1642,8 @@ def index():
 app = rx.App(
     theme=rx.theme(appearance="inherit"),
     head_components=[
+        rx.el.script(src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"),
+        rx.el.script(src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js"),
         rx.el.title("PdC Swim"),
         rx.el.style("html { overflow-y: scroll; }"),
         rx.el.link(rel="icon", type="image/jpeg", href="/icon.jpg"),
