@@ -630,6 +630,7 @@ class State(rx.State):
             self.active_swimmer_key = ""
             self.selected_nage_state = ""
         self.loading_init = False
+        return rx.call_script("document.title = 'PdC Swim'")
 
     def on_load_route(self):
         """Lit la clé nageur depuis le path /nageur/[key]."""
@@ -643,8 +644,10 @@ class State(rx.State):
             self.active_swimmer_key = ""
             self.selected_nage_state = ""
         self.loading_init = False
-        # Injecter le manifest spécifique au nageur
+        # Injecter le manifest spécifique au nageur + titre
+        name = SWIMMERS.get(key, {}).get("name", "")
         return rx.call_script(
+            f"document.title = '{name} Swim';"
             f"var l=document.querySelector('link[rel=manifest]');"
             f"if(l){{l.href='/{key}-manifest.json';}}"
             f"else{{var n=document.createElement('link');n.rel='manifest';n.href='/{key}-manifest.json';document.head.appendChild(n);}}"
