@@ -4,8 +4,6 @@ import re
 import html
 import json
 import time
-import plotly.graph_objects as go
-import numpy as np
 from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Optional, Union
@@ -747,8 +745,36 @@ class State(rx.State):
 
     def nav_to_nage(self, n: str):
         self.selected_nage_state = n
-        key = self.active_swimmer_key
-
+        yield
+        # Charger les classements si pas en cache
+        nage = n.rstrip(".")
+        swimmer_key = self.active_swimmer_key
+        bl = self.current_bassin
+        if self.active_rankings.get(f"{nage}|{bl}"):
+            return  # déjà en cache
+        ffn_id     = self.swimmer_ffn_id
+        birth_year = self.swimmer_birth_year
+        gender     = self.swimmer_gender
+        sai        = current_season_year()
+        cat        = sai - birth_year
+        idepr = EPREUVE_CODES.get(gender, EPREUVE_CODES["M"]).get(nage)
+        if not idepr: return
+        for bc, bll in [("25", "25m"), ("50", "50m")]:
+            try:
+                _, epr_name, _, rank, top = _fetch_one((bc, bll, nage, idepr, sai, cat, "dept", ffn_id))
+                all_rankings = json.loads(self.all_rankings_json) if self.all_rankings_json not in ("{}", "") else {}
+                nr = all_rankings.get(swimmer_key, {})
+                nr[f"{epr_name}|{bll}"] = rank
+                all_rankings[swimmer_key] = nr
+                self.all_rankings_json = json.dumps(all_rankings)
+                all_top10 = json.loads(self.all_top10_json) if self.all_top10_json not in ("{}", "") else {}
+                nt = all_top10.get(swimmer_key, {})
+                nt[f"{epr_name}|{bll}|dept"] = top
+                all_top10[swimmer_key] = nt
+                self.all_top10_json = json.dumps(all_top10)
+                yield
+            except Exception as e:
+                print(f"[nav_to_nage] ERREUR {nage}|{bll}: {e}")
 
     def nav_back_to_nageur(self):
         self.selected_nage_state = "" 
@@ -872,32 +898,28 @@ class State(rx.State):
         except: return ""
 
     @rx.var(cache=True)
-    def plot_fig(self) -> go.Figure:
+    def chart_data(self) -> list[dict]:
+        """Données pour Recharts : liste de {date, secs, label, qualif}."""
         d = sorted(self.filtered_data, key=lambda x: datetime.strptime(x.D, "%d/%m/%Y"))
-        if not d: return go.Figure()
-        dates = [datetime.strptime(x.D, "%d/%m/%Y") for x in d]
-        secs  = [to_sec(x.T) for x in d]
-        f = go.Figure(go.Scatter(
-            x=dates, y=secs, mode='lines+markers',
-            text=[f"{x.D}<br>{x.T}" for x in d], hoverinfo='text',
-            line=dict(color='#3b82f6', width=2),
-            marker=dict(size=10, color='#3b82f6', line=dict(width=2, color='white')),
-        ))
+        if not d: return []
         q_val = self.qualif_time_val
-        vals  = secs + ([to_sec(q_val)] if q_val else [])
-        min_v, max_v = min(vals) * 0.99, max(vals) * 1.01
-        tick_vals = np.linspace(min_v, max_v, 5)
-        if self.current_bassin == "50m" and q_val:
-            f.add_hline(y=to_sec(q_val), line_dash="dash", line_color="#ef4444", line_width=2,
-                        annotation_text=f"Qualif. {self.current_category} ({q_val})",
-                        annotation_position="top left", annotation_font_size=11, annotation_font_color="#ef4444")
-        f.update_layout(
-            yaxis=dict(tickmode='array', tickvals=tick_vals, ticktext=[format_min_sec_short(v) for v in tick_vals]),
-            margin=dict(l=50, r=20, t=30, b=30), height=230,
-            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-            font=dict(color="gray", size=10), showlegend=False, dragmode=False,
-        )
-        return f
+        q_secs = to_sec(q_val) if q_val else None
+        result = []
+        for x in d:
+            s = to_sec(x.T)
+            result.append({
+                "date": x.D,
+                "secs": round(s, 2),
+                "label": x.T,
+                "qualif": round(q_secs, 2) if q_secs else None,
+            })
+        return result
+
+    @rx.var(cache=True)
+    def chart_qualif_label(self) -> str:
+        q = self.qualif_time_val
+        if not q: return ""
+        return f"Qualif. {self.current_category} ({q})"
 
     # ── Classements ───────────────────────────────────────────────────────────
 
@@ -955,11 +977,9 @@ class State(rx.State):
 
         try:
             all_results  = json.loads(self.all_results_json)  if self.all_results_json  not in ("{}", "") else {}
-            all_rankings = json.loads(self.all_rankings_json) if self.all_rankings_json not in ("{}", "") else {}
-            all_top10    = json.loads(self.all_top10_json)    if self.all_top10_json    not in ("{}", "") else {}
             all_upd      = json.loads(self.all_last_update)   if self.all_last_update   not in ("{}", "") else {}
 
-            # ── 1. Performances 25m + 50m en parallèle ───────────────
+            # ── Performances 25m + 50m en parallèle ───────────────────
             new_res = []
             with ThreadPoolExecutor(max_workers=2) as ex:
                 futures_perf = [ex.submit(_fetch_perf, (bc, bl, ffn_id)) for bc, bl in [("25", "25m"), ("50", "50m")]]
@@ -973,32 +993,10 @@ class State(rx.State):
             all_upd[key]     = time.time()
             self.all_results_json  = json.dumps(all_results)
             self.all_last_update   = json.dumps(all_upd)
-            yield
-
-            # ── 2. Classements Isère (36 requêtes parallèles) ────────
-            gender = self.swimmer_gender
-            tasks_isere = [
-                (bc, bl, epr_name, idepr, sai, cat, "dept", ffn_id)
-                for bc, bl in [("25", "25m"), ("50", "50m")]
-                for epr_name, idepr in EPREUVE_CODES.get(gender, EPREUVE_CODES["M"]).items()
-            ]
-            new_ranks = {}
-            new_top10 = {}
-            with ThreadPoolExecutor(max_workers=12) as ex:
-                futures = {ex.submit(_fetch_one, t): t for t in tasks_isere}
-                for fut in futures:
-                    try:
-                        bl, epr_name, scope, rank, top = fut.result(timeout=20)
-                        new_ranks[f"{epr_name}|{bl}"]      = rank
-                        new_top10[f"{epr_name}|{bl}|dept"] = top
-                    except Exception as e:
-                        t = futures[fut]
-                        print(f"[force_refresh] classement ERREUR {t[2]}|{t[1]}: {e}")
-
-            all_rankings[key] = new_ranks
-            all_top10[key]    = new_top10
+            # Effacer les classements pour forcer un rechargement à la demande
+            all_rankings = json.loads(self.all_rankings_json) if self.all_rankings_json not in ("{}", "") else {}
+            all_rankings[key] = {}
             self.all_rankings_json = json.dumps(all_rankings)
-            self.all_top10_json    = json.dumps(all_top10)
 
         except Exception as e:
             print(f"[force_refresh] ERREUR: {type(e).__name__}: {e}")
@@ -1249,7 +1247,7 @@ def swimmer_card(key: str, sw: dict) -> rx.Component:
 
 def header_accueil() -> rx.Component:
     return rx.hstack(
-        rx.image(src="/icon.png", width="40px", height="40px", border_radius="8px", object_fit="cover"),
+        rx.image(src="/icon.jpg", width="40px", height="40px", border_radius="8px", object_fit="cover"),
         rx.text("Pont de Claix Natation", font_weight="bold", font_size="0.95em", color=rx.color("gray", 12)),
         rx.spacer(),
         rx.color_mode.button(variant="ghost"),
@@ -1261,7 +1259,7 @@ def header_accueil() -> rx.Component:
 def header_nageur() -> rx.Component:
     return rx.hstack(
         rx.image(
-            src="/icon.png", width="40px", height="40px", border_radius="8px", object_fit="cover",
+            src="/icon.jpg", width="40px", height="40px", border_radius="8px", object_fit="cover",
             cursor="pointer", on_click=State.nav_to_accueil,
         ),
         rx.spacer(),
@@ -1537,7 +1535,38 @@ def index():
                             width="100%", size="1", variant="surface",
                         ),
                         rx.box(
-                            rx.plotly(data=State.plot_fig, config={"displayModeBar": False, "responsive": True}, width="100%"),
+                            rx.recharts.responsive_container(
+                                rx.recharts.line_chart(
+                                    rx.recharts.line(
+                                        data_key="secs",
+                                        stroke="#3b82f6",
+                                        stroke_width=2,
+                                        dot={"fill": "#3b82f6", "r": 5, "strokeWidth": 2, "stroke": "white"},
+                                    ),
+                                    rx.recharts.line(
+                                        data_key="qualif",
+                                        stroke="#ef4444",
+                                        stroke_width=2,
+                                        stroke_dasharray="5 5",
+                                        dot=False,
+                                    ),
+                                    rx.recharts.x_axis(data_key="date", tick={"fontSize": 10}, tick_line=False),
+                                    rx.recharts.y_axis(
+                                        tick_formatter=rx.Var.create("(v) => { const m=Math.floor(v/60); const s=Math.round(v%60); return m>0 ? m+':'+String(s).padStart(2,'0') : s+'s'; }"),
+                                        tick={"fontSize": 10},
+                                        tick_line=False,
+                                        width=45,
+                                    ),
+                                    rx.recharts.graphing_tooltip(
+                                        formatter=rx.Var.create("(v, n, p) => [p.payload.label, '']"),
+                                        label_formatter=rx.Var.create("(l) => l"),
+                                    ),
+                                    data=State.chart_data,
+                                    margin={"top": 10, "right": 10, "left": 0, "bottom": 0},
+                                ),
+                                width="100%",
+                                height=230,
+                            ),
                             width="100%", border="1px solid var(--gray-4)",
                             border_radius="12px", overflow="hidden", padding_y="10px",
                         ),
@@ -1558,8 +1587,8 @@ app = rx.App(
     head_components=[
         rx.el.title("PdC Swim"),
         rx.el.style("html { overflow-y: scroll; }"),
-        rx.el.link(rel="icon", type="image/png", href="/icon.png"),
-        rx.el.link(rel="apple-touch-icon", sizes="512x512", href="/icon.png"),
+        rx.el.link(rel="icon", type="image/jpeg", href="/icon.jpg"),
+        rx.el.link(rel="apple-touch-icon", sizes="512x512", href="/icon.jpg"),
         rx.el.meta(name="apple-mobile-web-app-capable", content="yes"),
         rx.el.meta(name="apple-mobile-web-app-status-bar-style", content="default"),
         rx.el.meta(name="apple-mobile-web-app-title", content="PdC Swim"),
