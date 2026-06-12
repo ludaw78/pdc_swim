@@ -1651,7 +1651,9 @@ app = rx.App(
     head_components=[
         rx.el.script(src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"),
         rx.el.script(src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js"),
+        rx.el.script("document.documentElement.lang='fr';"),
         rx.el.title("PdC Swim"),
+        rx.el.meta(http_equiv="content-language", content="fr"),
         rx.el.style("html { overflow-y: scroll; }"),
         rx.el.link(rel="icon", type="image/jpeg", href="/icon.jpg"),
         rx.el.link(rel="apple-touch-icon", sizes="512x512", href="/icon.jpg"),
