@@ -744,7 +744,9 @@ class State(rx.State):
 
     def change_bassin(self, v: Union[str, list[str]]):
         self.current_bassin = v[0] if isinstance(v, list) else v
-        return rx.call_script("window.scrollTo({top: 0, behavior: 'instant'})")
+        yield rx.call_script("window.scrollTo({top: 0, behavior: 'instant'})")
+        if self.selected_nage:
+            yield State.render_chart
 
     def nav_to_nage(self, n: str):
         self.selected_nage_state = n
