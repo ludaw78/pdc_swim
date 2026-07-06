@@ -1093,10 +1093,13 @@ class State(rx.State):
             all_upd[key]     = time.time()
             self.all_results_json  = json.dumps(all_results)
             self.all_last_update   = json.dumps(all_upd)
-            # Effacer les classements pour forcer un rechargement à la demande
+            # Effacer classements et top10 pour forcer un rechargement à la demande
             all_rankings = json.loads(self.all_rankings_json) if self.all_rankings_json not in ("{}", "") else {}
             all_rankings[key] = {}
             self.all_rankings_json = json.dumps(all_rankings)
+            all_top10 = json.loads(self.all_top10_json) if self.all_top10_json not in ("{}", "") else {}
+            all_top10[key] = {}
+            self.all_top10_json = json.dumps(all_top10)
 
         except Exception as e:
             print(f"[force_refresh] ERREUR: {type(e).__name__}: {e}")
