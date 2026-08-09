@@ -1261,7 +1261,7 @@ class State(rx.State):
   el._ch=new Chart(el,{{type:'line',
     data:{{datasets:[{{data:d.map(function(x){{return{{x:x.iso,y:x.secs,label:x.label,lieu:x.lieu,date:x.date,type:x.type}};}})
     ,borderColor:'#3b82f6',borderWidth:2,pointBackgroundColor:'#3b82f6',pointRadius:3,tension:0,pointHoverRadius:5}}]}},
-    options:{{plugins:{{legend:{{display:false}},tooltip:{{
+    options:{{animation:false,plugins:{{legend:{{display:false}},tooltip:{{
       callbacks:{{
         title:function(items){{var r=items[0].raw;return r.lieu+' ('+r.date+')';}},
         afterTitle:function(items){{return items[0].raw.type;}},
