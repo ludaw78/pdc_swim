@@ -1444,10 +1444,13 @@ class State(rx.State):
                 dist_label = (dist_match.group(1) + "m") if dist_match else epreuve
                 rows = [SplitRow(dist=dist_label, cumul=matched.T, partiel=matched.T, half="")]
         self.dialog_splits_data = rows
-        self.dialog_stroke_counts = load_stroke_counts(
-            self.active_swimmer_key, date, epreuve, bassin, temps, len(rows)
-        )
-        self.dialog_comment = load_comment(self.active_swimmer_key, date, epreuve, bassin, temps)
+        # Les 2 requetes DB sont independantes -> en parallele plutot qu'en serie,
+        # pour ne pas payer deux fois la latence reseau vers Neon a chaque ouverture.
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            f_counts = ex.submit(load_stroke_counts, self.active_swimmer_key, date, epreuve, bassin, temps, len(rows))
+            f_comment = ex.submit(load_comment, self.active_swimmer_key, date, epreuve, bassin, temps)
+            self.dialog_stroke_counts = f_counts.result()
+            self.dialog_comment = f_comment.result()
         self.dialog_open = True
 
     def close_dialog(self):
@@ -1466,15 +1469,17 @@ class State(rx.State):
             return
         username = self.auth_payload.get("username", "")
         dist_labels = [s.dist for s in self.dialog_splits_data]
-        save_stroke_counts_db(
-            self.active_swimmer_key, self.dialog_date, self.dialog_epreuve,
-            self.dialog_bassin, self.dialog_temps, dist_labels,
-            self.dialog_stroke_counts, username,
-        )
-        save_comment_db(
-            self.active_swimmer_key, self.dialog_date, self.dialog_epreuve,
-            self.dialog_bassin, self.dialog_temps, self.dialog_comment, username,
-        )
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            f1 = ex.submit(
+                save_stroke_counts_db, self.active_swimmer_key, self.dialog_date, self.dialog_epreuve,
+                self.dialog_bassin, self.dialog_temps, dist_labels, self.dialog_stroke_counts, username,
+            )
+            f2 = ex.submit(
+                save_comment_db, self.active_swimmer_key, self.dialog_date, self.dialog_epreuve,
+                self.dialog_bassin, self.dialog_temps, self.dialog_comment, username,
+            )
+            f1.result()
+            f2.result()
         yield rx.toast.success("Enregistré")
 
 # ── 6. COMPOSANTS UI ─────────────────────────────────────────────────────────
