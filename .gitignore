@@ -1,6 +1,10 @@
 # Ne jamais versionner config.py (contient les données du nageur)
 config.py
 
+# Secrets (connexion DB, cles API, etc.)
+.env
+.env.*
+
 # Reflex
 .web/
 __pycache__/
