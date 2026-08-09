@@ -4,5 +4,10 @@ config.py
 # Reflex
 .web/
 __pycache__/
-*.pyc
+*.py[cod]
 .reflex/
+.states/
+
+# Divers
+*.db
+assets/external/
