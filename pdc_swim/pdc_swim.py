@@ -62,6 +62,15 @@ DIALOG_ROW_HEIGHT_PX = 22
 DIALOG_MAX_VISIBLE_ROWS = 19
 DIALOG_MIN_VISIBLE_ROWS = 4
 
+# Style standard pour masquer visuellement un texte tout en le gardant accessible
+# aux lecteurs d'ecran (ex: rx.dialog.description requis par Radix mais qu'on ne
+# veut pas afficher visuellement).
+VISUALLY_HIDDEN_STYLE = {
+    "position": "absolute", "width": "1px", "height": "1px",
+    "padding": "0", "margin": "-1px", "overflow": "hidden",
+    "clip": "rect(0, 0, 0, 0)", "whiteSpace": "nowrap", "border": "0",
+}
+
 # ── 2. PARSEUR ────────────────────────────────────────────────────────────────
 
 @dataclass
@@ -465,11 +474,13 @@ def grille_qualif_full(gender: str) -> dict:
 
 def parse_ranking_row(html_content: str, swimmer_id: str) -> dict:
     result = {"dept": "-", "region": "-", "national": "-",
-              "dept_tc": "-", "region_tc": "-", "national_tc": "-"}
+              "dept_tc": "-", "region_tc": "-", "national_tc": "-",
+              "_found": False}
     rows = find_all(r"<tr[^>]*>(.*?)</tr>", html_content)
     target_row = next((r for r in rows if swimmer_id in r), None)
     if not target_row:
         return result
+    result["_found"] = True
     all_tippies = re.findall(r'data-tippy-content="((?:[^"\\]|\\.)*)"', target_row, re.DOTALL)
     if not all_tippies:
         all_tippies = re.findall(r"data-tippy-content='((?:[^'\\]|\\.)*)'", target_row, re.DOTALL)
@@ -593,28 +604,39 @@ def _fetch_one(args: tuple) -> tuple:
     else:
         base = f"https://ffn.extranat.fr/webffn/nat_rankings.php?idact=nat&idopt=sai&go=epr&idbas={bc}&idepr={idepr}&idsai={sai}&idcat={cat}"
     suffix = {"dept": "&iddep=1611", "region": "&idreg=3004", "national": ""}[scope]
+    fallback_rank = {"dept": "-", "region": "-", "national": "-",
+                      "dept_tc": "-", "region_tc": "-", "national_tc": "-"}
     try:
         h = _fetch_url(base + suffix)
-        rank = parse_ranking_row(h, ffn_id) if scope == "dept" else None
-        top  = parse_top10(h, ffn_id)
+        if scope == "dept":
+            rank = parse_ranking_row(h, ffn_id)
+            if not rank["_found"]:
+                # Pas dans le classement Isere (nageur d'un autre departement) :
+                # region/national viennent de la meme tooltip que le departement,
+                # donc on retente via la region (AURA) pour au moins les recuperer,
+                # departement reste "-" (on ne connait pas son vrai departement).
+                h_region = _fetch_url(base + "&idreg=3004")
+                rank_region = parse_ranking_row(h_region, ffn_id)
+                rank = dict(fallback_rank)
+                if rank_region["_found"]:
+                    rank["region"] = rank_region["region"]
+                    rank["region_tc"] = rank_region["region_tc"]
+                    rank["national"] = rank_region["national"]
+                    rank["national_tc"] = rank_region["national_tc"]
+                else:
+                    # Meme pas dans la region -> dernier repli, national seul (pas de filtre)
+                    h_nat = _fetch_url(base)
+                    rank_nat = parse_ranking_row(h_nat, ffn_id)
+                    if rank_nat["_found"]:
+                        rank["national"] = rank_nat["national"]
+                        rank["national_tc"] = rank_nat["national_tc"]
+            rank.pop("_found", None)
+        else:
+            rank = None
+        top = parse_top10(h, ffn_id)
         return (bl, epr_name, scope, rank, top)
-    except:
-        fallback_rank = {"dept": "-", "region": "-", "national": "-"} if scope == "dept" else None
-        return (bl, epr_name, scope, fallback_rank, [])
-    bc, bl, epr_name, idepr, sai, cat, scope, ffn_id = args
-    if cat > 18:
-        base = f"https://ffn.extranat.fr/webffn/nat_rankings.php?idact=nat&idopt=sai&go=epr&idbas={bc}&idepr={idepr}&idsai={sai}"
-    else:
-        base = f"https://ffn.extranat.fr/webffn/nat_rankings.php?idact=nat&idopt=sai&go=epr&idbas={bc}&idepr={idepr}&idsai={sai}&idcat={cat}"
-    suffix = {"dept": "&iddep=1611", "region": "&idreg=3004", "national": ""}[scope]
-    try:
-        h = _fetch_url(base + suffix)
-        rank = parse_ranking_row(h, ffn_id) if scope == "dept" else None
-        top  = parse_top10(h, ffn_id)
-        return (bl, epr_name, scope, rank, top)
-    except:
-        fallback_rank = {"dept": "-", "region": "-", "national": "-"} if scope == "dept" else None
-        return (bl, epr_name, scope, fallback_rank, [])
+    except Exception:
+        return (bl, epr_name, scope, fallback_rank if scope == "dept" else None, [])
 
 # ── 5. STATE ──────────────────────────────────────────────────────────────────
 
@@ -1521,13 +1543,14 @@ def top10_dialog() -> rx.Component:
         rx.dialog.content(
             rx.vstack(
                 rx.hstack(
-                    rx.text(State.top10_dialog_title, font_weight="bold", font_size="0.85em", color=rx.color("gray", 12)),
+                    rx.dialog.title(State.top10_dialog_title, font_weight="bold", font_size="0.85em", color=rx.color("gray", 12), margin="0"),
                     rx.spacer(),
                     rx.dialog.close(
                         rx.button(rx.icon(tag="x", size=16), variant="ghost", size="1", on_click=State.close_top10),
                     ),
                     width="100%", align="center",
                 ),
+                rx.dialog.description("Classement du nageur pour cette nage.", style=VISUALLY_HIDDEN_STYLE),
                 rx.divider(),
                 rx.cond(
                     State.top10_loading,
@@ -1607,7 +1630,7 @@ def splits_dialog() -> rx.Component:
             rx.vstack(
                 rx.hstack(
                     rx.vstack(
-                        rx.text(State.dialog_lieu, font_weight="bold", font_size="0.9em", color=rx.color("gray", 12)),
+                        rx.dialog.title(State.dialog_lieu, font_weight="bold", font_size="0.9em", color=rx.color("gray", 12), margin="0"),
                         rx.text(State.dialog_date + "  " + State.dialog_type, font_size="0.72em", color=rx.color("gray", 10)),
                         spacing="0", align_items="start",
                     ),
@@ -1617,6 +1640,7 @@ def splits_dialog() -> rx.Component:
                     ),
                     width="100%", align="start",
                 ),
+                rx.dialog.description("Détail de la course : intermédiaires, mouvements et commentaires.", style=VISUALLY_HIDDEN_STYLE),
                 rx.divider(),
                 rx.tabs.root(
                     rx.tabs.list(
@@ -1787,7 +1811,7 @@ def settings_dialog() -> rx.Component:
             rx.vstack(
                 rx.hstack(
                     rx.vstack(
-                        rx.text("Paramètres du compte", font_weight="bold", font_size="0.9em", color=rx.color("gray", 12)),
+                        rx.dialog.title("Paramètres du compte", font_weight="bold", font_size="0.9em", color=rx.color("gray", 12), margin="0"),
                         rx.text(State.auth_payload.get("username", ""), font_size="0.72em", color=rx.color("gray", 10)),
                         spacing="0", align_items="start",
                     ),
@@ -1797,6 +1821,7 @@ def settings_dialog() -> rx.Component:
                     ),
                     width="100%", align="start",
                 ),
+                rx.dialog.description("Changer de mot de passe, ou déclencher une sauvegarde.", style=VISUALLY_HIDDEN_STYLE),
                 rx.divider(),
                 rx.text("Changer de mot de passe", font_size="0.8em", font_weight="bold", color=rx.color("gray", 12)),
                 rx.input(
