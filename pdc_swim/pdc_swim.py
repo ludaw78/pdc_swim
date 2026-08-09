@@ -10,6 +10,30 @@ from typing import Optional, Union
 from concurrent.futures import ThreadPoolExecutor
 from pydantic import BaseModel
 
+from .models import (
+    RaceStrokeCount,  # noqa: F401  (necessaire pour reflex db / migrations)
+    RaceComment,  # noqa: F401  (necessaire pour reflex db / migrations)
+    User,  # noqa: F401  (necessaire pour reflex db / migrations)
+    load_stroke_counts,
+    save_stroke_counts as save_stroke_counts_db,
+    export_all_stroke_counts,  # noqa: F401  (utilise par backup.py)
+    load_comment,
+    save_comment as save_comment_db,
+    export_all_comments,  # noqa: F401  (utilise par backup.py)
+    get_user_by_username,
+    get_user_by_email,
+    update_password_hash,
+)
+from .auth import (
+    hash_password,
+    check_password,
+    make_token,
+    verify_token,
+    make_reset_token,
+    verify_reset_token,
+)
+from .backup import backup_endpoint, send_email, run_backup
+
 # ── 1. CONFIGURATION NAGEURS ─────────────────────────────────────────────────
 # Pour ajouter un nageur : ajouter une entrée dans ce dict.
 # La clé (ex: "tristan") est utilisée dans l'URL : app.com/?nageur=tristan
@@ -24,9 +48,19 @@ SWIMMERS = {
     "nola":     {"name": "Nola",     "birth_year": 2011, "gender": "F", "ffn_id": "3231817",  "photo": "photo_nola.jpg"},
     "arthur":   {"name": "Arthur",   "birth_year": 2014, "gender": "M", "ffn_id": "3736819",  "photo": "photo_arthur.jpg"},
     "corentin": {"name": "Corentin", "birth_year": 2006, "gender": "M", "ffn_id": "2550147",  "photo": "photo_corentin.jpg"},
+    # Alumni : anciens nageurs du club, affiches dans leur propre section sur l'accueil
+    "olivia":   {"name": "Olivia",   "birth_year": 2010, "gender": "F", "ffn_id": "3221505",  "photo": "photo_olivia.jpg", "alumni": True},
 }
 
 DEFAULT_SWIMMER = "tristan"  # affiché si pas de paramètre ?nageur= dans l'URL
+
+# Hauteur d'une ligne (intermediaire/mouvement) dans la pop-up course, et hauteur
+# des onglets Intermediaires/Mouvements/Commentaires qui en decoule : calculee selon
+# le nombre de longueurs, plafonnee a la hauteur d'un 800m tous les 50m (16 lignes)
+# + marge de 3 lignes pour eviter un scroll qui apparaissait trop tot.
+DIALOG_ROW_HEIGHT_PX = 22
+DIALOG_MAX_VISIBLE_ROWS = 19
+DIALOG_MIN_VISIBLE_ROWS = 4
 
 # ── 2. PARSEUR ────────────────────────────────────────────────────────────────
 
@@ -602,11 +636,212 @@ class State(rx.State):
     top10_dialog_key:   str = ""
     top10_loading:      bool = False
     dialog_open:        bool = False
-    dialog_key:         str = ""
     dialog_lieu:        str = ""
     dialog_type:        str = ""
     dialog_date:        str = ""
+    dialog_epreuve:     str = ""
+    dialog_bassin:      str = ""
+    dialog_temps:       str = ""
     dialog_splits_data: list[SplitRow] = []
+    dialog_stroke_counts: list[str] = []
+    dialog_comment: str = ""
+
+    @rx.var(cache=True)
+    def dialog_dist_per_mouv(self) -> list[str]:
+        """Distance par mouvement (longueur du bassin / nb de mouvements), par longueur."""
+        try:
+            length_m = float(self.dialog_bassin.replace("m", "").strip())
+        except ValueError:
+            length_m = 0.0
+        result = []
+        for val in self.dialog_stroke_counts:
+            if not val.isdigit() or int(val) <= 0 or length_m <= 0:
+                result.append("")
+                continue
+            result.append(f"{length_m / int(val):.2f}")
+        return result
+
+    @rx.var(cache=True)
+    def dialog_has_movements(self) -> bool:
+        return any(v != "" for v in self.dialog_stroke_counts)
+
+    @rx.var(cache=True)
+    def dialog_has_comment(self) -> bool:
+        return self.dialog_comment != ""
+
+    @rx.var(cache=True)
+    def dialog_tab_height(self) -> str:
+        """Hauteur commune aux 3 onglets : celle du contenu, entre un minimum
+        (DIALOG_MIN_VISIBLE_ROWS, pour les courses courtes) et un plafond
+        (DIALOG_MAX_VISIBLE_ROWS, pour les tres longues)."""
+        n = max(len(self.dialog_splits_data), 1)
+        rows = max(min(n, DIALOG_MAX_VISIBLE_ROWS), DIALOG_MIN_VISIBLE_ROWS)
+        return f"{rows * DIALOG_ROW_HEIGHT_PX}px"
+
+    @rx.var(cache=True)
+    def dialog_movements_tab_disabled(self) -> bool:
+        return (not self.is_coach) and not self.dialog_has_movements
+
+    @rx.var(cache=True)
+    def dialog_comment_tab_disabled(self) -> bool:
+        return (not self.is_coach) and not self.dialog_has_comment
+
+    # Auth entraineur/admin
+    session_token: str = rx.Cookie("", name="pdc_session", max_age=60 * 60 * 24 * 180, same_site="lax", secure=True)
+    login_username: str = ""
+    login_password: str = ""
+    login_error:    str = ""
+    # Pop-up settings (changement de mot de passe)
+    settings_dialog_open: bool = False
+    settings_current_password: str = ""
+    settings_new_password:     str = ""
+    settings_new_password2:    str = ""
+    settings_error:   str = ""
+    settings_message: str = ""
+    # Mot de passe oublie
+    forgot_email:   str = ""
+    forgot_message: str = ""
+    reset_token:         str = ""
+    reset_username:      str = ""
+    reset_new_password:  str = ""
+    reset_new_password2: str = ""
+    reset_error:   str = ""
+    reset_message: str = ""
+
+    @rx.var(cache=True)
+    def auth_payload(self) -> dict:
+        return verify_token(self.session_token) or {}
+
+    @rx.var(cache=True)
+    def is_authenticated(self) -> bool:
+        return bool(self.auth_payload)
+
+    @rx.var(cache=True)
+    def is_admin(self) -> bool:
+        return self.auth_payload.get("role") == "admin"
+
+    @rx.var(cache=True)
+    def is_coach(self) -> bool:
+        return self.auth_payload.get("role") in ("coach", "admin")
+
+    def login(self):
+        user = get_user_by_username(self.login_username)
+        if user is None or not check_password(self.login_password, user.password_hash):
+            self.login_error = "Identifiants incorrects"
+            return
+        self.session_token = make_token(user.username, user.role)
+        self.login_username = ""
+        self.login_password = ""
+        self.login_error = ""
+        return rx.redirect("/")
+
+    def logout(self):
+        self.session_token = ""
+        # rx.redirect fait une navigation cote client (pas de rechargement complet),
+        # donc l'etat (dont settings_dialog_open) survit sinon a la deconnexion.
+        self.settings_dialog_open = False
+        return rx.redirect("/")
+
+    def open_settings(self):
+        if not self.is_authenticated:
+            return
+        self.settings_current_password = ""
+        self.settings_new_password = ""
+        self.settings_new_password2 = ""
+        self.settings_error = ""
+        self.settings_message = ""
+        self.settings_dialog_open = True
+
+    def close_settings(self):
+        self.settings_dialog_open = False
+
+    def trigger_backup_now(self):
+        if not self.is_admin:  # re-verification serveur - le rx.cond dans l'UI n'est qu'un filtre d'affichage
+            return
+        try:
+            result = run_backup()
+            yield rx.toast.success(f"Sauvegarde envoyée ({result['rows']} entrées)")
+        except Exception as e:
+            yield rx.toast.error(f"Échec de la sauvegarde : {e}")
+
+    def change_password(self):
+        if not self.is_authenticated:
+            return
+        username = self.auth_payload.get("username", "")
+        user = get_user_by_username(username)
+        self.settings_message = ""
+        if user is None or not check_password(self.settings_current_password, user.password_hash):
+            self.settings_error = "Mot de passe actuel incorrect"
+            return
+        if len(self.settings_new_password) < 8:
+            self.settings_error = "Le nouveau mot de passe doit faire au moins 8 caractères"
+            return
+        if self.settings_new_password != self.settings_new_password2:
+            self.settings_error = "Les deux mots de passe ne correspondent pas"
+            return
+        update_password_hash(username, hash_password(self.settings_new_password))
+        self.settings_current_password = ""
+        self.settings_new_password = ""
+        self.settings_new_password2 = ""
+        self.settings_error = ""
+        self.settings_message = "Mot de passe mis à jour."
+
+    def _current_origin(self) -> str:
+        """Reconstruit scheme://host a partir de l'URL courante (pas de path/query)."""
+        url = self.router.url
+        scheme_rest = url.split("//", 1)
+        scheme = scheme_rest[0] + "//" if len(scheme_rest) > 1 else "https://"
+        rest = scheme_rest[1] if len(scheme_rest) > 1 else scheme_rest[0]
+        host = rest.split("/", 1)[0]
+        return scheme + host
+
+    def request_password_reset(self):
+        email = self.forgot_email.strip()
+        user = get_user_by_email(email) if email else None
+        if user is not None:
+            token = make_reset_token(user.username)
+            reset_url = f"{self._current_origin()}/reset-password?token={token}"
+            try:
+                send_email(
+                    user.email,
+                    "Réinitialisation de votre mot de passe PdC Swim",
+                    f"Bonjour {user.username},\n\n"
+                    f"Cliquez sur ce lien pour choisir un nouveau mot de passe (valable 1h) :\n{reset_url}\n\n"
+                    "Si vous n'êtes pas à l'origine de cette demande, ignorez cet email.",
+                )
+            except Exception as e:
+                print(f"[request_password_reset] envoi email echoue: {e}")
+        # message generique, ne revele jamais si l'email existe ou non
+        self.forgot_email = ""
+        self.forgot_message = "Si cette adresse est associée à un compte, un email vient d'être envoyé."
+
+    def on_load_reset_password(self):
+        url = self.router.url
+        token = ""
+        if "token=" in url:
+            try:
+                token = url.split("token=")[1].split("&")[0].strip()
+            except Exception:
+                token = ""
+        self.reset_token = token
+        self.reset_username = verify_reset_token(token) or ""
+
+    def do_reset_password(self):
+        self.reset_message = ""
+        if not self.reset_username:
+            self.reset_error = "Lien invalide ou expiré, refaites une demande."
+            return
+        if len(self.reset_new_password) < 8:
+            self.reset_error = "Le mot de passe doit faire au moins 8 caractères"
+            return
+        if self.reset_new_password != self.reset_new_password2:
+            self.reset_error = "Les deux mots de passe ne correspondent pas"
+            return
+        update_password_hash(self.reset_username, hash_password(self.reset_new_password))
+        self.reset_new_password = ""
+        self.reset_new_password2 = ""
+        self.reset_error = ""
+        self.reset_message = "Mot de passe mis à jour, vous pouvez vous connecter."
 
     def on_load(self):
         """Lit les paramètres ?nageur= et &nage= dans l'URL au chargement."""
@@ -626,10 +861,13 @@ class State(rx.State):
         if key and key in SWIMMERS:
             self.active_swimmer_key = key
             self.selected_nage_state = nage if nage else ""
-        else:
-            self.active_swimmer_key = ""
-            self.selected_nage_state = ""
+            self.loading_init = False
+            return rx.call_script("document.title = 'PdC Swim'")
+        self.active_swimmer_key = ""
+        self.selected_nage_state = ""
         self.loading_init = False
+        if not self.is_authenticated:
+            return rx.redirect("/login")
         return rx.call_script("document.title = 'PdC Swim'")
 
     def on_load_route(self):
@@ -1080,17 +1318,27 @@ class State(rx.State):
             all_upd      = json.loads(self.all_last_update)   if self.all_last_update   not in ("{}", "") else {}
 
             # ── Performances 25m + 50m en parallèle ───────────────────
-            new_res = []
+            # Remplacement par bassin, seulement si son scraping a reussi : si un
+            # bassin echoue (timeout FFN, etc.), on garde ses anciennes donnees au
+            # lieu d'ecraser tout le nageur avec une liste partielle (perte silencieuse).
+            existing = all_results.get(key, [])
+            results_by_bassin = {
+                "25m": [r for r in existing if r.get("B") == "25m"],
+                "50m": [r for r in existing if r.get("B") == "50m"],
+            }
+            any_success = False
             with ThreadPoolExecutor(max_workers=2) as ex:
-                futures_perf = [ex.submit(_fetch_perf, (bc, bl, ffn_id)) for bc, bl in [("25", "25m"), ("50", "50m")]]
-                for f in futures_perf:
+                futures_perf = {ex.submit(_fetch_perf, (bc, bl, ffn_id)): bl for bc, bl in [("25", "25m"), ("50", "50m")]}
+                for f, bl in futures_perf.items():
                     try:
-                        new_res.extend(f.result(timeout=20))
+                        results_by_bassin[bl] = f.result(timeout=20)
+                        any_success = True
                     except Exception as e:
-                        print(f"[force_refresh] fetch_perf ERREUR: {e}")
+                        print(f"[force_refresh] fetch_perf ERREUR ({bl}): {e}")
 
-            all_results[key] = new_res
-            all_upd[key]     = time.time()
+            all_results[key] = results_by_bassin["25m"] + results_by_bassin["50m"]
+            if any_success:
+                all_upd[key] = time.time()
             self.all_results_json  = json.dumps(all_results)
             self.all_last_update   = json.dumps(all_upd)
             # Effacer classements et top10 pour forcer un rechargement à la demande
@@ -1172,21 +1420,62 @@ class State(rx.State):
     def dialog_splits(self) -> list[SplitRow]:
         return self.dialog_splits_data
 
-    def open_dialog(self, key: str, lieu: str, type_compet: str, date: str):
-        self.dialog_key  = key
-        self.dialog_lieu = lieu
-        self.dialog_type = type_compet
-        self.dialog_date = date
+    def open_dialog(self, date: str, epreuve: str, bassin: str, temps: str, lieu: str, type_compet: str):
+        self.dialog_date    = date
+        self.dialog_epreuve = epreuve
+        self.dialog_bassin  = bassin
+        self.dialog_temps   = temps
+        self.dialog_lieu    = lieu
+        self.dialog_type    = type_compet
         rows: list[SplitRow] = []
+        matched = None
         for r in self.filtered_data:
-            if r.D + r.T == key and r.S:
-                rows = decode_splits(r.S)
+            if r.D == date and r.E == epreuve and r.B == bassin and r.T == temps:
+                matched = r
                 break
+        if matched:
+            if matched.S:
+                rows = decode_splits(matched.S)
+            if not rows:
+                # Pas d'intermediaires FFN (ex: courses de 50m, un seul bassin) :
+                # on synthetise une seule longueur couvrant la course entiere,
+                # sinon les onglets Mouvements/Commentaires n'ont rien a afficher.
+                dist_match = re.match(r"(\d+)", epreuve)
+                dist_label = (dist_match.group(1) + "m") if dist_match else epreuve
+                rows = [SplitRow(dist=dist_label, cumul=matched.T, partiel=matched.T, half="")]
         self.dialog_splits_data = rows
+        self.dialog_stroke_counts = load_stroke_counts(
+            self.active_swimmer_key, date, epreuve, bassin, temps, len(rows)
+        )
+        self.dialog_comment = load_comment(self.active_swimmer_key, date, epreuve, bassin, temps)
         self.dialog_open = True
 
     def close_dialog(self):
         self.dialog_open = False
+
+    def set_stroke_count(self, index: int, value: str):
+        clean = "".join(ch for ch in value if ch.isdigit())
+        lst = list(self.dialog_stroke_counts)
+        if 0 <= index < len(lst):
+            lst[index] = clean
+            self.dialog_stroke_counts = lst
+
+    def save_race_data(self):
+        """Enregistre les mouvements (par longueur) et le commentaire de la course."""
+        if not self.is_coach:  # re-verification serveur - le rx.cond dans l'UI n'est qu'un filtre d'affichage
+            return
+        username = self.auth_payload.get("username", "")
+        dist_labels = [s.dist for s in self.dialog_splits_data]
+        save_stroke_counts_db(
+            self.active_swimmer_key, self.dialog_date, self.dialog_epreuve,
+            self.dialog_bassin, self.dialog_temps, dist_labels,
+            self.dialog_stroke_counts, username,
+        )
+        save_comment_db(
+            self.active_swimmer_key, self.dialog_date, self.dialog_epreuve,
+            self.dialog_bassin, self.dialog_temps, self.dialog_comment, username,
+        )
+        yield rx.toast.success("Enregistré")
 
 # ── 6. COMPOSANTS UI ─────────────────────────────────────────────────────────
 
@@ -1257,6 +1546,8 @@ def top10_dialog() -> rx.Component:
         on_open_change=State.close_top10,
     )
 
+ROW_HEIGHT = f"{DIALOG_ROW_HEIGHT_PX}px"
+
 def split_row_ui(s: SplitRow) -> rx.Component:
     return rx.hstack(
         rx.text(s.dist + " :", font_size="0.75em", color=rx.color("gray", 10), width="52px", text_align="right"),
@@ -1271,7 +1562,37 @@ def split_row_ui(s: SplitRow) -> rx.Component:
             rx.text("[" + s.half + "]", font_size="0.72em", color=rx.color("green", 9)),
             rx.box(),
         ),
-        spacing="2", align="center",
+        spacing="2", align="center", height=ROW_HEIGHT,
+    )
+
+def movement_row_ui(s: SplitRow, i: int) -> rx.Component:
+    return rx.hstack(
+        rx.text(s.dist + " :", font_size="0.75em", color=rx.color("gray", 10), width="52px", text_align="right"),
+        rx.hstack(
+            rx.cond(
+                State.is_coach,
+                rx.input(
+                    value=State.dialog_stroke_counts[i],
+                    on_change=lambda v: State.set_stroke_count(i, v),
+                    placeholder="nb", width="52px", size="1", inputmode="numeric",
+                    style={"height": "20px", "minHeight": "20px", "paddingTop": "0px", "paddingBottom": "0px"},
+                ),
+                rx.cond(
+                    State.dialog_stroke_counts[i] != "",
+                    rx.text(State.dialog_stroke_counts[i], font_size="0.75em", font_weight="bold", color=rx.color("gray", 12), width="52px"),
+                    rx.text("—", font_size="0.75em", color=rx.color("gray", 8), width="52px"),
+                ),
+            ),
+            rx.text("mouv.", font_size="0.68em", color=rx.color("gray", 9)),
+            spacing="2", align="center", height=ROW_HEIGHT,
+        ),
+        rx.spacer(),
+        rx.cond(
+            State.dialog_dist_per_mouv[i] != "",
+            rx.text(State.dialog_dist_per_mouv[i] + " m/mouv.", font_size="0.72em", color=rx.color("purple", 9)),
+            rx.box(),
+        ),
+        spacing="2", align="center", width="100%", height=ROW_HEIGHT, padding_right="14px",
     )
 
 def splits_dialog() -> rx.Component:
@@ -1291,13 +1612,68 @@ def splits_dialog() -> rx.Component:
                     width="100%", align="start",
                 ),
                 rx.divider(),
-                rx.cond(
-                    State.dialog_splits.length() > 0,
-                    rx.vstack(
-                        rx.foreach(State.dialog_splits, split_row_ui),
-                        spacing="1", align_items="start", width="100%", overflow_y="auto", max_height="55vh",
+                rx.tabs.root(
+                    rx.tabs.list(
+                        rx.tabs.trigger("Inter.", value="inter"),
+                        rx.tabs.trigger("Mouv.", value="mvt", disabled=State.dialog_movements_tab_disabled),
+                        rx.tabs.trigger("Comment.", value="com", disabled=State.dialog_comment_tab_disabled),
                     ),
-                    rx.text("Aucun temps de passage", font_size="0.8em", color=rx.color("gray", 10)),
+                    rx.tabs.content(
+                        rx.box(
+                            rx.cond(
+                                State.dialog_splits.length() > 0,
+                                rx.vstack(
+                                    rx.foreach(State.dialog_splits, split_row_ui),
+                                    spacing="0", align_items="start", width="100%",
+                                    style={"lineHeight": "1.2"},
+                                ),
+                                rx.text("Aucun temps de passage", font_size="0.8em", color=rx.color("gray", 10)),
+                            ),
+                            height=State.dialog_tab_height, overflow_y="auto", width="100%",
+                        ),
+                        value="inter", padding_top="6px",
+                    ),
+                    rx.tabs.content(
+                        rx.box(
+                            rx.cond(
+                                State.dialog_splits.length() > 0,
+                                rx.vstack(
+                                    rx.foreach(State.dialog_splits, movement_row_ui),
+                                    spacing="0", align_items="start", width="100%",
+                                    style={"lineHeight": "1.2"},
+                                ),
+                                rx.text("Aucun temps de passage", font_size="0.8em", color=rx.color("gray", 10)),
+                            ),
+                            height=State.dialog_tab_height, overflow_y="auto", width="100%",
+                        ),
+                        value="mvt", padding_top="6px",
+                    ),
+                    rx.tabs.content(
+                        rx.box(
+                            rx.cond(
+                                State.is_coach,
+                                rx.text_area(
+                                    placeholder="Commentaire sur la course...",
+                                    value=State.dialog_comment,
+                                    on_change=State.set_dialog_comment,
+                                    width="100%", height="100%", resize="none",
+                                ),
+                                rx.cond(
+                                    State.dialog_comment != "",
+                                    rx.text(State.dialog_comment, font_size="0.8em", color=rx.color("gray", 12), white_space="pre-wrap"),
+                                    rx.text("Aucun commentaire", font_size="0.8em", color=rx.color("gray", 10)),
+                                ),
+                            ),
+                            height=State.dialog_tab_height, overflow_y="auto", width="100%",
+                        ),
+                        value="com", padding_top="6px",
+                    ),
+                    default_value="inter", width="100%",
+                ),
+                rx.cond(
+                    State.is_coach,
+                    rx.button("Enregistrer", on_click=State.save_race_data, width="100%", size="2"),
+                    rx.box(),
                 ),
                 spacing="3", width="100%",
             ),
@@ -1332,7 +1708,7 @@ def swimmer_card(key: str, sw: dict) -> rx.Component:
             ),
             rx.vstack(
                 rx.text(sw["name"], font_weight="bold", font_size="0.9em", color=rx.color("gray", 12)),
-                rx.text(cat, font_size="0.75em", color=rx.color("gray", 10)),
+                rx.text(f"{sw['birth_year']} ({cat})", font_size="0.75em", color=rx.color("gray", 10)),
                 spacing="0", align_items="start",
             ),
             spacing="3", align="center",
@@ -1354,16 +1730,215 @@ def header_accueil() -> rx.Component:
         rx.text("Pont de Claix Natation", font_weight="bold", font_size="0.95em", color=rx.color("gray", 12)),
         rx.spacer(),
         rx.color_mode.button(variant="ghost"),
+        rx.button(rx.icon(tag="settings"), on_click=State.open_settings, variant="ghost"),
         width="100%", align="center", padding_x="1em", padding_y="0.6em",
         border_bottom="1px solid var(--gray-4)",
         background_color=rx.color("gray", 1),
     )
 
+
+def login_page() -> rx.Component:
+    return rx.theme(
+        rx.center(
+            rx.vstack(
+                rx.image(src="/icon.jpg", width="56px", height="56px", border_radius="12px", object_fit="cover"),
+                rx.text("Connexion entraîneur / admin", font_weight="bold", font_size="1em", color=rx.color("gray", 12)),
+                rx.input(
+                    placeholder="Identifiant",
+                    value=State.login_username,
+                    on_change=State.set_login_username,
+                    width="100%",
+                ),
+                rx.input(
+                    placeholder="Mot de passe",
+                    type="password",
+                    value=State.login_password,
+                    on_change=State.set_login_password,
+                    width="100%",
+                ),
+                rx.cond(
+                    State.login_error != "",
+                    rx.text(State.login_error, color=rx.color("red", 9), font_size="0.8em"),
+                    rx.box(),
+                ),
+                rx.button("Se connecter", on_click=State.login, width="100%"),
+                rx.link(rx.text("Mot de passe oublié ?", font_size="0.8em", color=rx.color("blue", 9)), href="/forgot-password"),
+                spacing="3",
+                background_color=rx.color("gray", 1),
+                border="1px solid var(--gray-4)",
+                border_radius="16px",
+                padding="24px",
+                max_width="320px",
+                width="92vw",
+            ),
+            min_height="100vh", width="100%",
+        ),
+    )
+
+def settings_dialog() -> rx.Component:
+    return rx.dialog.root(
+        rx.dialog.content(
+            rx.vstack(
+                rx.hstack(
+                    rx.vstack(
+                        rx.text("Paramètres du compte", font_weight="bold", font_size="0.9em", color=rx.color("gray", 12)),
+                        rx.text(State.auth_payload.get("username", ""), font_size="0.72em", color=rx.color("gray", 10)),
+                        spacing="0", align_items="start",
+                    ),
+                    rx.spacer(),
+                    rx.dialog.close(
+                        rx.button(rx.icon(tag="x", size=16), variant="ghost", size="1", on_click=State.close_settings),
+                    ),
+                    width="100%", align="start",
+                ),
+                rx.divider(),
+                rx.text("Changer de mot de passe", font_size="0.8em", font_weight="bold", color=rx.color("gray", 12)),
+                rx.input(
+                    placeholder="Mot de passe actuel", type="password",
+                    value=State.settings_current_password, on_change=State.set_settings_current_password,
+                    width="100%",
+                ),
+                rx.input(
+                    placeholder="Nouveau mot de passe", type="password",
+                    value=State.settings_new_password, on_change=State.set_settings_new_password,
+                    width="100%",
+                ),
+                rx.input(
+                    placeholder="Confirmer le nouveau mot de passe", type="password",
+                    value=State.settings_new_password2, on_change=State.set_settings_new_password2,
+                    width="100%",
+                ),
+                rx.cond(
+                    State.settings_error != "",
+                    rx.text(State.settings_error, color=rx.color("red", 9), font_size="0.8em"),
+                    rx.box(),
+                ),
+                rx.cond(
+                    State.settings_message != "",
+                    rx.text(State.settings_message, color=rx.color("green", 9), font_size="0.8em"),
+                    rx.box(),
+                ),
+                rx.button("Mettre à jour le mot de passe", on_click=State.change_password, width="100%"),
+                rx.cond(
+                    State.is_admin,
+                    rx.fragment(
+                        rx.divider(),
+                        rx.button(
+                            rx.icon(tag="download", size=14), "Déclencher une sauvegarde",
+                            on_click=State.trigger_backup_now, variant="soft", width="100%",
+                        ),
+                    ),
+                    rx.box(),
+                ),
+                rx.divider(),
+                rx.button("Se déconnecter", on_click=State.logout, variant="soft", color_scheme="red", width="100%"),
+                spacing="3", width="100%",
+            ),
+            background_color=rx.color("gray", 1),
+            border="1px solid var(--gray-4)",
+            border_radius="16px",
+            padding="16px",
+            max_width="360px",
+            width="92vw",
+        ),
+        open=State.settings_dialog_open,
+        on_open_change=State.close_settings,
+    )
+
+def forgot_password_page() -> rx.Component:
+    return rx.theme(
+        rx.center(
+            rx.vstack(
+                rx.image(src="/icon.jpg", width="56px", height="56px", border_radius="12px", object_fit="cover"),
+                rx.text("Mot de passe oublié", font_weight="bold", font_size="1em", color=rx.color("gray", 12)),
+                rx.text(
+                    "Entrez votre adresse email, un lien de réinitialisation vous sera envoyé si un compte y est associé.",
+                    font_size="0.78em", color=rx.color("gray", 10), text_align="center",
+                ),
+                rx.input(
+                    placeholder="Adresse email",
+                    value=State.forgot_email, on_change=State.set_forgot_email,
+                    width="100%",
+                ),
+                rx.cond(
+                    State.forgot_message != "",
+                    rx.text(State.forgot_message, color=rx.color("green", 9), font_size="0.8em", text_align="center"),
+                    rx.box(),
+                ),
+                rx.button("Envoyer le lien", on_click=State.request_password_reset, width="100%"),
+                rx.link(rx.text("← Retour à la connexion", font_size="0.8em", color=rx.color("gray", 10)), href="/login"),
+                spacing="3",
+                background_color=rx.color("gray", 1),
+                border="1px solid var(--gray-4)",
+                border_radius="16px",
+                padding="24px",
+                max_width="320px",
+                width="92vw",
+            ),
+            min_height="100vh", width="100%",
+        ),
+    )
+
+def reset_password_page() -> rx.Component:
+    return rx.theme(
+        rx.center(
+            rx.vstack(
+                rx.image(src="/icon.jpg", width="56px", height="56px", border_radius="12px", object_fit="cover"),
+                rx.text("Nouveau mot de passe", font_weight="bold", font_size="1em", color=rx.color("gray", 12)),
+                rx.cond(
+                    State.reset_username != "",
+                    rx.fragment(
+                        rx.input(
+                            placeholder="Nouveau mot de passe", type="password",
+                            value=State.reset_new_password, on_change=State.set_reset_new_password,
+                            width="100%",
+                        ),
+                        rx.input(
+                            placeholder="Confirmer le nouveau mot de passe", type="password",
+                            value=State.reset_new_password2, on_change=State.set_reset_new_password2,
+                            width="100%",
+                        ),
+                        rx.button("Réinitialiser", on_click=State.do_reset_password, width="100%"),
+                    ),
+                    rx.text("Lien invalide ou expiré — refaites une demande depuis la page de connexion.",
+                        font_size="0.82em", color=rx.color("red", 9), text_align="center"),
+                ),
+                rx.cond(
+                    State.reset_error != "",
+                    rx.text(State.reset_error, color=rx.color("red", 9), font_size="0.8em"),
+                    rx.box(),
+                ),
+                rx.cond(
+                    State.reset_message != "",
+                    rx.text(State.reset_message, color=rx.color("green", 9), font_size="0.8em"),
+                    rx.box(),
+                ),
+                rx.link(rx.text("← Retour à la connexion", font_size="0.8em", color=rx.color("gray", 10)), href="/login"),
+                spacing="3",
+                background_color=rx.color("gray", 1),
+                border="1px solid var(--gray-4)",
+                border_radius="16px",
+                padding="24px",
+                max_width="320px",
+                width="92vw",
+            ),
+            min_height="100vh", width="100%",
+        ),
+    )
+
 def header_nageur() -> rx.Component:
     return rx.hstack(
-        rx.image(
-            src="/icon.jpg", width="40px", height="40px", border_radius="8px", object_fit="cover",
-            cursor="pointer", on_click=State.nav_to_accueil,
+        rx.cond(
+            State.is_authenticated,
+            # entraineur/admin connecte : logo cliquable -> retour a la liste des nageurs
+            rx.image(
+                src="/icon.jpg", width="40px", height="40px", border_radius="8px", object_fit="cover",
+                cursor="pointer", on_click=State.nav_to_accueil,
+            ),
+            # visiteur non authentifie : logo statique, aucun lien vers l'espace entraineur
+            rx.image(
+                src="/icon.jpg", width="40px", height="40px", border_radius="8px", object_fit="cover",
+            ),
         ),
         rx.spacer(),
         rx.hstack(
@@ -1402,34 +1977,49 @@ def index():
         rx.center(
         splits_dialog(),
         top10_dialog(),
+        settings_dialog(),
         rx.cond(
             State.loading_init,
             rx.center(rx.spinner(size="3"), min_height="100vh"),
             rx.cond(
             State.active_swimmer_key == "",
-            # ── PAGE ACCUEIL : grille nageurs ────────────────────────
-            rx.vstack(
-                header_accueil(),
+            rx.cond(
+                State.is_authenticated,
+                # ── PAGE ACCUEIL : grille nageurs (reservee coach/admin) ──
                 rx.vstack(
-                    rx.text("Garçons", font_size="0.8em", font_weight="bold", color=rx.color("gray", 10), padding_x="1em"),
+                    header_accueil(),
                     rx.vstack(
-                        *[swimmer_card(k, v) for k, v in sorted(
-                            ((k, v) for k, v in SWIMMERS.items() if v["gender"] == "M"),
-                            key=lambda x: x[1]["birth_year"], reverse=True
-                        )],
-                        spacing="2", width="100%", padding_x="1em",
+                        rx.text("Garçons", font_size="0.8em", font_weight="bold", color=rx.color("gray", 10), padding_x="1em"),
+                        rx.vstack(
+                            *[swimmer_card(k, v) for k, v in sorted(
+                                ((k, v) for k, v in SWIMMERS.items() if v["gender"] == "M" and not v.get("alumni")),
+                                key=lambda x: x[1]["birth_year"], reverse=True
+                            )],
+                            spacing="2", width="100%", padding_x="1em",
+                        ),
+                        rx.text("Filles", font_size="0.8em", font_weight="bold", color=rx.color("gray", 10), padding_x="1em", padding_top="0.5em"),
+                        rx.vstack(
+                            *[swimmer_card(k, v) for k, v in sorted(
+                                ((k, v) for k, v in SWIMMERS.items() if v["gender"] == "F" and not v.get("alumni")),
+                                key=lambda x: x[1]["birth_year"], reverse=True
+                            )],
+                            spacing="2", width="100%", padding_x="1em",
+                        ),
+                        rx.text("Alumni", font_size="0.8em", font_weight="bold", color=rx.color("gray", 10), padding_x="1em", padding_top="0.5em"),
+                        rx.vstack(
+                            *[swimmer_card(k, v) for k, v in sorted(
+                                ((k, v) for k, v in SWIMMERS.items() if v.get("alumni")),
+                                key=lambda x: x[1]["birth_year"], reverse=True
+                            )],
+                            spacing="2", width="100%", padding_x="1em",
+                        ),
+                        spacing="2", width="100%", padding_y="1em",
                     ),
-                    rx.text("Filles", font_size="0.8em", font_weight="bold", color=rx.color("gray", 10), padding_x="1em", padding_top="0.5em"),
-                    rx.vstack(
-                        *[swimmer_card(k, v) for k, v in sorted(
-                            ((k, v) for k, v in SWIMMERS.items() if v["gender"] == "F"),
-                            key=lambda x: x[1]["birth_year"], reverse=True
-                        )],
-                        spacing="2", width="100%", padding_x="1em",
-                    ),
-                    spacing="2", width="100%", padding_y="1em",
+                    width=["100%", "420px"], spacing="0",
                 ),
-                width=["100%", "420px"], spacing="0",
+                # visiteur non authentifie : on_load redirige vers /login,
+                # ceci ne s'affiche qu'un bref instant avant la redirection.
+                rx.center(rx.spinner(size="3"), min_height="100vh"),
             ),
             rx.cond(
                 State.selected_nage == "",
@@ -1624,7 +2214,7 @@ def index():
                                         rx.table.cell(rx.text(r.P, color=rx.color("gray", 11))),
                                         cursor="pointer",
                                         _hover={"background_color": "var(--gray-3)"},
-                                        on_click=State.open_dialog(r.D + r.T, r.N, r.V, r.D),
+                                        on_click=State.open_dialog(r.D, r.E, r.B, r.T, r.N, r.V),
                                     ),
                                 ),
                             ),
@@ -1668,7 +2258,11 @@ app = rx.App(
         rx.el.meta(name="mobile-web-app-capable", content="yes"),
     ],
 )
+app._api.add_route("/api/backup", backup_endpoint, methods=["GET"])
 app.add_page(index, route="/", on_load=State.on_load)
+app.add_page(login_page, route="/login")
+app.add_page(forgot_password_page, route="/forgot-password")
+app.add_page(reset_password_page, route="/reset-password", on_load=State.on_load_reset_password)
 app.add_page(index, route="/nageur/tristan",  on_load=State.on_load_route)
 app.add_page(index, route="/nageur/louis",    on_load=State.on_load_route)
 app.add_page(index, route="/nageur/anthony",  on_load=State.on_load_route)
@@ -1677,3 +2271,4 @@ app.add_page(index, route="/nageur/aline",    on_load=State.on_load_route)
 app.add_page(index, route="/nageur/nola",     on_load=State.on_load_route)
 app.add_page(index, route="/nageur/arthur",   on_load=State.on_load_route)
 app.add_page(index, route="/nageur/corentin", on_load=State.on_load_route)
+app.add_page(index, route="/nageur/olivia",   on_load=State.on_load_route)
