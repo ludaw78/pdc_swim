@@ -730,6 +730,34 @@ class State(rx.State):
     reset_error:   str = ""
     reset_message: str = ""
 
+    # Setters explicites (remplacent les setters auto-generes, depreciees depuis Reflex 0.8.9)
+    def set_dialog_comment(self, value: str):
+        self.dialog_comment = value
+
+    def set_login_username(self, value: str):
+        self.login_username = value
+
+    def set_login_password(self, value: str):
+        self.login_password = value
+
+    def set_settings_current_password(self, value: str):
+        self.settings_current_password = value
+
+    def set_settings_new_password(self, value: str):
+        self.settings_new_password = value
+
+    def set_settings_new_password2(self, value: str):
+        self.settings_new_password2 = value
+
+    def set_forgot_email(self, value: str):
+        self.forgot_email = value
+
+    def set_reset_new_password(self, value: str):
+        self.reset_new_password = value
+
+    def set_reset_new_password2(self, value: str):
+        self.reset_new_password2 = value
+
     @rx.var(cache=True)
     def auth_payload(self) -> dict:
         return verify_token(self.session_token) or {}
