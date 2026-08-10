@@ -1116,7 +1116,7 @@ class State(rx.State):
 
     @rx.var(cache=True)
     def current_results_list(self) -> list[Result]:
-        try: return [Result(**r) for r in json.loads(self.results_json)]
+        try: return [Result(**r) for r in self.active_results]
         except: return []
 
     @rx.var(cache=True)
@@ -2275,8 +2275,8 @@ def index():
 app = rx.App(
     theme=rx.theme(appearance="inherit"),
     head_components=[
-        rx.el.script(src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"),
-        rx.el.script(src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js"),
+        rx.el.script(src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js", defer=True),
+        rx.el.script(src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js", defer=True),
         rx.el.script("document.documentElement.lang='fr';"),
         rx.el.title("PdC Swim"),
         rx.el.meta(http_equiv="content-language", content="fr"),
