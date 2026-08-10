@@ -669,8 +669,8 @@ class State(rx.State):
     dialog_comment: str = ""
 
     @rx.var(cache=True)
-    def dialog_dist_per_mouv(self) -> list[str]:
-        """Vitesse moyenne par mouvement : longueur du bassin / (temps intermediaire * nb de mouvements)."""
+    def dialog_swim_index(self) -> list[str]:
+        """Indice de nage : vitesse * distance par coup = longueur^2 / (temps intermediaire * nb de mouvements)."""
         try:
             length_m = float(self.dialog_bassin.replace("m", "").strip())
         except ValueError:
@@ -681,7 +681,7 @@ class State(rx.State):
             if not val.isdigit() or int(val) <= 0 or length_m <= 0 or partiel_sec >= 9999.0 or partiel_sec <= 0:
                 result.append("")
                 continue
-            result.append(f"{length_m / (partiel_sec * int(val)):.2f}")
+            result.append(f"{(length_m ** 2) / (partiel_sec * int(val)):.2f}")
         return result
 
     @rx.var(cache=True)
@@ -1646,8 +1646,8 @@ def movement_row_ui(s: SplitRow, i: int) -> rx.Component:
         ),
         rx.spacer(),
         rx.cond(
-            State.dialog_dist_per_mouv[i] != "",
-            rx.text(State.dialog_dist_per_mouv[i] + " m/s/coup", font_size="0.72em", color=rx.color("purple", 9)),
+            State.dialog_swim_index[i] != "",
+            rx.text(State.dialog_swim_index[i] + " IN", font_size="0.72em", color=rx.color("purple", 9)),
             rx.box(),
         ),
         spacing="2", align="center", width="100%", height=ROW_HEIGHT, padding_right="14px",
