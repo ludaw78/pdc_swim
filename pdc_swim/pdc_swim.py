@@ -670,17 +670,18 @@ class State(rx.State):
 
     @rx.var(cache=True)
     def dialog_dist_per_mouv(self) -> list[str]:
-        """Distance par mouvement (longueur du bassin / nb de mouvements), par longueur."""
+        """Vitesse moyenne par mouvement : longueur du bassin / (temps intermediaire * nb de mouvements)."""
         try:
             length_m = float(self.dialog_bassin.replace("m", "").strip())
         except ValueError:
             length_m = 0.0
         result = []
-        for val in self.dialog_stroke_counts:
-            if not val.isdigit() or int(val) <= 0 or length_m <= 0:
+        for i, val in enumerate(self.dialog_stroke_counts):
+            partiel_sec = to_sec(self.dialog_splits_data[i].partiel) if i < len(self.dialog_splits_data) else 9999.0
+            if not val.isdigit() or int(val) <= 0 or length_m <= 0 or partiel_sec >= 9999.0 or partiel_sec <= 0:
                 result.append("")
                 continue
-            result.append(f"{length_m / int(val):.2f}")
+            result.append(f"{length_m / (partiel_sec * int(val)):.2f}")
         return result
 
     @rx.var(cache=True)
@@ -1646,7 +1647,7 @@ def movement_row_ui(s: SplitRow, i: int) -> rx.Component:
         rx.spacer(),
         rx.cond(
             State.dialog_dist_per_mouv[i] != "",
-            rx.text(State.dialog_dist_per_mouv[i] + " m/mouv.", font_size="0.72em", color=rx.color("purple", 9)),
+            rx.text(State.dialog_dist_per_mouv[i] + " m/s/coup", font_size="0.72em", color=rx.color("purple", 9)),
             rx.box(),
         ),
         spacing="2", align="center", width="100%", height=ROW_HEIGHT, padding_right="14px",
