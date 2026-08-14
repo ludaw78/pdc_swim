@@ -2304,6 +2304,8 @@ def index():
 app = rx.App(
     theme=rx.theme(appearance="inherit"),
     head_components=[
+        # Analytics (Umami, respect de la vie privee, pas de cookie - pas de bandeau necessaire)
+        rx.el.script(src="https://cloud.umami.is/script.js", defer=True, custom_attrs={"data-website-id": "1427d690-95e9-424b-98d8-3f68f017eafa"}),
         rx.el.script(src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js", defer=True),
         rx.el.script(src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js", defer=True),
         rx.el.script("document.documentElement.lang='fr';"),
