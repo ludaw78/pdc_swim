@@ -1024,12 +1024,18 @@ class State(rx.State):
         self.active_swimmer_key = key
         self.selected_nage_state = ""
         self.current_bassin = "50m"
-        return rx.call_script(f"window.history.replaceState(null, '', '?nageur={key}')")
+        return rx.call_script(
+            f"window.history.replaceState(null, '', '?nageur={key}');"
+            "if(window.umami){window.umami.track();}"
+        )
 
     def nav_to_accueil(self):
         self.active_swimmer_key = ""
         self.selected_nage_state = ""
-        return rx.call_script("window.history.replaceState(null, '', '/')")
+        return rx.call_script(
+            "window.history.replaceState(null, '', '/');"
+            "if(window.umami){window.umami.track();}"
+        )
 
     def change_bassin(self, v: Union[str, list[str]]):
         self.current_bassin = v[0] if isinstance(v, list) else v
@@ -1039,7 +1045,14 @@ class State(rx.State):
 
     def nav_to_nage(self, n: str):
         self.selected_nage_state = n
-        yield
+        yield rx.call_script(
+            "(function(){"
+            "var u=new URL(window.location.href);"
+            f"u.searchParams.set('nage', {json.dumps(n)});"
+            "window.history.replaceState(null, '', u.pathname + u.search);"
+            "if(window.umami){window.umami.track();}"
+            "})();"
+        )
         # Charger les classements si pas en cache
         nage = n.rstrip(".")
         swimmer_key = self.active_swimmer_key
@@ -1071,7 +1084,15 @@ class State(rx.State):
                 print(f"[nav_to_nage] ERREUR {nage}|{bll}: {e}")
 
     def nav_back_to_nageur(self):
-        self.selected_nage_state = "" 
+        self.selected_nage_state = ""
+        return rx.call_script(
+            "(function(){"
+            "var u=new URL(window.location.href);"
+            "u.searchParams.delete('nage');"
+            "window.history.replaceState(null, '', u.pathname + u.search);"
+            "if(window.umami){window.umami.track();}"
+            "})();"
+        )
 
     # ── Catégorie ─────────────────────────────────────────────────────────────
 
