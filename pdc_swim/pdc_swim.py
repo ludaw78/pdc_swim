@@ -3,12 +3,26 @@ import urllib.request
 import re
 import html
 import json
+import os
 import time
 from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Optional, Union
 from concurrent.futures import ThreadPoolExecutor
 from pydantic import BaseModel
+
+# Reflex force une verification de schema (check_if_schema_up_to_date=True, cablee en
+# dur dans `reflex run`) a CHAQUE demarrage du backend des que db_url est configure.
+# Mesure : ~2.4-4s par appel contre notre base Neon, variable, potentiellement suffisant
+# pour depasser le budget de connexion de Fly (~8s) et causer des echecs de cold start
+# intermittents. On la desactive uniquement en production (variable d'env dediee) tout
+# en la gardant active en local pour etre alerte d'une derive de schema non migree.
+# On applique nous-memes les migrations avant chaque deploiement (`reflex db migrate`),
+# donc ce filet de securite automatique n'apporte rien en prod, juste du risque de timeout.
+if os.environ.get("SKIP_SCHEMA_CHECK"):
+    from reflex.utils import prerequisites as _reflex_prerequisites
+
+    _reflex_prerequisites.check_schema_up_to_date = lambda: None
 
 from .models import (
     RaceStrokeCount,  # noqa: F401  (necessaire pour reflex db / migrations)
@@ -657,6 +671,7 @@ class State(rx.State):
     top10_dialog_title: str = ""
     top10_dialog_key:   str = ""
     top10_loading:      bool = False
+    nage_ranking_loading: bool = False
     dialog_open:        bool = False
     dialog_lieu:        str = ""
     dialog_type:        str = ""
@@ -846,12 +861,18 @@ class State(rx.State):
         host = rest.split("/", 1)[0]
         return scheme + host
 
-    def request_password_reset(self):
-        email = self.forgot_email.strip()
+    @rx.event(background=True)
+    async def request_password_reset(self):
+        # background=True : send_email() est un appel reseau synchrone vers l'API
+        # Resend, qui bloquait sinon le lock d'etat de toute la session le temps de
+        # l'envoi (meme anti-patron que nav_to_nage/open_top10).
+        async with self:
+            email = self.forgot_email.strip()
+            origin = self._current_origin()
         user = get_user_by_email(email) if email else None
         if user is not None:
             token = make_reset_token(user.username)
-            reset_url = f"{self._current_origin()}/reset-password?token={token}"
+            reset_url = f"{origin}/reset-password?token={token}"
             try:
                 send_email(
                     user.email,
@@ -863,8 +884,9 @@ class State(rx.State):
             except Exception as e:
                 print(f"[request_password_reset] envoi email echoue: {e}")
         # message generique, ne revele jamais si l'email existe ou non
-        self.forgot_email = ""
-        self.forgot_message = "Si cette adresse est associée à un compte, un email vient d'être envoyé."
+        async with self:
+            self.forgot_email = ""
+            self.forgot_message = "Si cette adresse est associée à un compte, un email vient d'être envoyé."
 
     def on_load_reset_password(self):
         url = self.router.url
@@ -993,19 +1015,6 @@ class State(rx.State):
         except:
             return {}
 
-    # Conservées pour compatibilité avec le reste du code
-    @rx.var(cache=True)
-    def results_json(self) -> str:
-        return json.dumps(self.active_results)
-
-    @rx.var(cache=True)
-    def rankings_json(self) -> str:
-        return json.dumps(self.active_rankings)
-
-    @rx.var(cache=True)
-    def top10_json(self) -> str:
-        return json.dumps(self.active_top10)
-
     @rx.var(cache=True)
     def last_up_display(self) -> str:
         try:
@@ -1039,8 +1048,14 @@ class State(rx.State):
         if self.selected_nage:
             yield State.render_chart
 
-    def nav_to_nage(self, n: str):
-        self.selected_nage_state = n
+    @rx.event(background=True)
+    async def nav_to_nage(self, n: str):
+        # background=True : les classements sont recuperes via des requetes reseau
+        # synchrones vers le site FFN (_fetch_one), qui peuvent prendre 1-3s. Sans ca,
+        # ce handler bloquait le lock d'etat de toute la session pendant ce temps
+        # (vu dans les logs Reflex : "state was held too longtime_taken=...").
+        async with self:
+            self.selected_nage_state = n
         yield rx.call_script(
             "(function(){"
             "var u=new URL(window.location.href);"
@@ -1050,33 +1065,43 @@ class State(rx.State):
         )
         # Charger les classements si pas en cache
         nage = n.rstrip(".")
-        swimmer_key = self.active_swimmer_key
-        bl = self.current_bassin
-        if self.active_rankings.get(f"{nage}|{bl}"):
+        async with self:
+            swimmer_key = self.active_swimmer_key
+            bl = self.current_bassin
+            deja_en_cache = bool(self.active_rankings.get(f"{nage}|{bl}"))
+            ffn_id     = self.swimmer_ffn_id
+            birth_year = self.swimmer_birth_year
+            gender     = self.swimmer_gender
+        if deja_en_cache:
             return  # déjà en cache
-        ffn_id     = self.swimmer_ffn_id
-        birth_year = self.swimmer_birth_year
-        gender     = self.swimmer_gender
         sai        = current_season_year()
         cat        = sai - birth_year
         idepr = EPREUVE_CODES.get(gender, EPREUVE_CODES["M"]).get(nage)
         if not idepr: return
-        for bc, bll in [("25", "25m"), ("50", "50m")]:
-            try:
-                _, epr_name, _, rank, top = _fetch_one((bc, bll, nage, idepr, sai, cat, "dept", ffn_id))
-                all_rankings = json.loads(self.all_rankings_json) if self.all_rankings_json not in ("{}", "") else {}
-                nr = all_rankings.get(swimmer_key, {})
-                nr[f"{epr_name}|{bll}"] = rank
-                all_rankings[swimmer_key] = nr
-                self.all_rankings_json = json.dumps(all_rankings)
-                all_top10 = json.loads(self.all_top10_json) if self.all_top10_json not in ("{}", "") else {}
-                nt = all_top10.get(swimmer_key, {})
-                nt[f"{epr_name}|{bll}|dept"] = top
-                all_top10[swimmer_key] = nt
-                self.all_top10_json = json.dumps(all_top10)
-                yield
-            except Exception as e:
-                print(f"[nav_to_nage] ERREUR {nage}|{bll}: {e}")
+        async with self:
+            self.nage_ranking_loading = True
+        yield
+        try:
+            for bc, bll in [("25", "25m"), ("50", "50m")]:
+                try:
+                    _, epr_name, _, rank, top = _fetch_one((bc, bll, nage, idepr, sai, cat, "dept", ffn_id))
+                    async with self:
+                        all_rankings = json.loads(self.all_rankings_json) if self.all_rankings_json not in ("{}", "") else {}
+                        nr = all_rankings.get(swimmer_key, {})
+                        nr[f"{epr_name}|{bll}"] = rank
+                        all_rankings[swimmer_key] = nr
+                        self.all_rankings_json = json.dumps(all_rankings)
+                        all_top10 = json.loads(self.all_top10_json) if self.all_top10_json not in ("{}", "") else {}
+                        nt = all_top10.get(swimmer_key, {})
+                        nt[f"{epr_name}|{bll}|dept"] = top
+                        all_top10[swimmer_key] = nt
+                        self.all_top10_json = json.dumps(all_top10)
+                    yield
+                except Exception as e:
+                    print(f"[nav_to_nage] ERREUR {nage}|{bll}: {e}")
+        finally:
+            async with self:
+                self.nage_ranking_loading = False
 
     def nav_back_to_nageur(self):
         self.selected_nage_state = ""
@@ -1295,7 +1320,6 @@ class State(rx.State):
   if(!el||!window.Chart){{setTimeout(draw,100);return;}}
   if(el._ch){{el._ch.destroy();}}
   var p={payload};
-  console.log('chart min/max/ticks:', p.min, p.max, p.ticks);
   var d=p.data; var mn=p.min; var mx=p.max; var tk=p.ticks;
   var fmt=function(v){{
     var m=String(Math.floor(v/60)).padStart(2,'0');
@@ -1329,8 +1353,7 @@ class State(rx.State):
 
     @rx.var(cache=True)
     def current_rankings(self) -> dict:
-        try: return json.loads(self.rankings_json)
-        except: return {}
+        return self.active_rankings
 
     @rx.var(cache=True)
     def selected_nage_rankings(self) -> dict:
@@ -1368,26 +1391,21 @@ class State(rx.State):
 
     # ── Refresh ───────────────────────────────────────────────────────────────
 
-    def force_refresh(self):
-        if self.loading: return
-        if self.active_swimmer_key not in SWIMMERS: return
-        self.loading = True
+    @rx.event(background=True)
+    async def force_refresh(self):
+        # background=True : les 2 requetes FFN (25m/50m, deja parallelisees en interne
+        # via ThreadPoolExecutor) peuvent prendre jusqu'a 20s chacune. Sans ca, le
+        # handler bloquait le lock d'etat de toute la session pendant tout ce temps.
+        async with self:
+            if self.loading or self.active_swimmer_key not in SWIMMERS:
+                return
+            self.loading = True
+            ffn_id     = self.swimmer_ffn_id
+            key        = self.active_swimmer_key
+            existing   = self.active_results
         yield
-        ffn_id     = self.swimmer_ffn_id
-        birth_year = self.swimmer_birth_year
-        sai        = current_season_year()
-        cat        = sai - birth_year
-        key        = self.active_swimmer_key
 
         try:
-            all_results  = json.loads(self.all_results_json)  if self.all_results_json  not in ("{}", "") else {}
-            all_upd      = json.loads(self.all_last_update)   if self.all_last_update   not in ("{}", "") else {}
-
-            # ── Performances 25m + 50m en parallèle ───────────────────
-            # Remplacement par bassin, seulement si son scraping a reussi : si un
-            # bassin echoue (timeout FFN, etc.), on garde ses anciennes donnees au
-            # lieu d'ecraser tout le nageur avec une liste partielle (perte silencieuse).
-            existing = all_results.get(key, [])
             results_by_bassin = {
                 "25m": [r for r in existing if r.get("B") == "25m"],
                 "50m": [r for r in existing if r.get("B") == "50m"],
@@ -1402,60 +1420,74 @@ class State(rx.State):
                     except Exception as e:
                         print(f"[force_refresh] fetch_perf ERREUR ({bl}): {e}")
 
-            all_results[key] = results_by_bassin["25m"] + results_by_bassin["50m"]
-            if any_success:
-                all_upd[key] = time.time()
-            self.all_results_json  = json.dumps(all_results)
-            self.all_last_update   = json.dumps(all_upd)
-            # Effacer classements et top10 pour forcer un rechargement à la demande
-            all_rankings = json.loads(self.all_rankings_json) if self.all_rankings_json not in ("{}", "") else {}
-            all_rankings[key] = {}
-            self.all_rankings_json = json.dumps(all_rankings)
-            all_top10 = json.loads(self.all_top10_json) if self.all_top10_json not in ("{}", "") else {}
-            all_top10[key] = {}
-            self.all_top10_json = json.dumps(all_top10)
+            async with self:
+                # ── Performances 25m + 50m en parallèle ───────────────────
+                # Remplacement par bassin, seulement si son scraping a reussi : si un
+                # bassin echoue (timeout FFN, etc.), on garde ses anciennes donnees au
+                # lieu d'ecraser tout le nageur avec une liste partielle (perte silencieuse).
+                all_results  = json.loads(self.all_results_json)  if self.all_results_json  not in ("{}", "") else {}
+                all_upd      = json.loads(self.all_last_update)   if self.all_last_update   not in ("{}", "") else {}
+                all_results[key] = results_by_bassin["25m"] + results_by_bassin["50m"]
+                if any_success:
+                    all_upd[key] = time.time()
+                self.all_results_json  = json.dumps(all_results)
+                self.all_last_update   = json.dumps(all_upd)
+                # Effacer classements et top10 pour forcer un rechargement à la demande
+                all_rankings = json.loads(self.all_rankings_json) if self.all_rankings_json not in ("{}", "") else {}
+                all_rankings[key] = {}
+                self.all_rankings_json = json.dumps(all_rankings)
+                all_top10 = json.loads(self.all_top10_json) if self.all_top10_json not in ("{}", "") else {}
+                all_top10[key] = {}
+                self.all_top10_json = json.dumps(all_top10)
 
         except Exception as e:
             print(f"[force_refresh] ERREUR: {type(e).__name__}: {e}")
         finally:
-            self.loading = False
-            yield
+            async with self:
+                self.loading = False
 
     # ── Top 10 ────────────────────────────────────────────────────────────────
 
     @rx.var(cache=True)
     def top10_dialog_data(self) -> list[Top10Entry]:
         try:
-            d = json.loads(self.top10_json)
-            entries = d.get(self.top10_dialog_key, [])
+            entries = self.active_top10.get(self.top10_dialog_key, [])
             return [Top10Entry(**e) for e in entries]
         except:
             return []
 
-    def open_top10(self, scope: str):
-        nage = self.selected_nage.rstrip(".")
-        self.top10_dialog_key = f"{nage}|{self.current_bassin}|{scope}"
-        tc = scope.endswith("_tc")
-        base_scope = scope.replace("_tc", "")
-        labels = {"national": "France", "region": "AURA", "dept": "Isère"}
-        cat = current_season_year() - self.swimmer_birth_year
-        suffix = " TC" if tc else f" U{cat}"
-        self.top10_dialog_title = f"Top 10 {labels[base_scope]}{suffix} — {nage} ({self.current_bassin})"
-        self.top10_dialog_open = True
-        all_top10 = json.loads(self.top10_json) if self.top10_json not in ("{}", "") else {}
-        if f"{nage}|{self.current_bassin}|{scope}" in all_top10:
+    @rx.event(background=True)
+    async def open_top10(self, scope: str):
+        # background=True : _fetch_url() est une requete reseau synchrone vers la FFN,
+        # qui bloquait sinon le lock d'etat de toute la session le temps de la requete
+        # (meme anti-patron que nav_to_nage, cf. logs "state was held too long").
+        async with self:
+            nage = self.selected_nage.rstrip(".")
+            self.top10_dialog_key = f"{nage}|{self.current_bassin}|{scope}"
+            tc = scope.endswith("_tc")
+            base_scope = scope.replace("_tc", "")
+            labels = {"national": "France", "region": "AURA", "dept": "Isère"}
+            cat = current_season_year() - self.swimmer_birth_year
+            suffix = " TC" if tc else f" U{cat}"
+            self.top10_dialog_title = f"Top 10 {labels[base_scope]}{suffix} — {nage} ({self.current_bassin})"
+            self.top10_dialog_open = True
+            deja_en_cache = f"{nage}|{self.current_bassin}|{scope}" in self.active_top10
+            bl = self.current_bassin
+            gender = self.swimmer_gender
+            ffn_id = self.swimmer_ffn_id
+            birth_year = self.swimmer_birth_year
+        if deja_en_cache:
             return
-        self.top10_loading = True
-        yield
-        idepr = EPREUVE_CODES.get(self.swimmer_gender, EPREUVE_CODES["M"]).get(nage, None)
+        async with self:
+            self.top10_loading = True
+        idepr = EPREUVE_CODES.get(gender, EPREUVE_CODES["M"]).get(nage, None)
         if idepr is None:
-            self.top10_loading = False
+            async with self:
+                self.top10_loading = False
             return
         sai    = current_season_year()
-        cat_val = sai - self.swimmer_birth_year
-        bc = "50" if self.current_bassin == "50m" else "25"
-        bl = self.current_bassin
-        ffn_id = self.swimmer_ffn_id
+        cat_val = sai - birth_year
+        bc = "50" if bl == "50m" else "25"
         if tc or cat_val > 18:
             base_url = f"https://ffn.extranat.fr/webffn/nat_rankings.php?idact=nat&idopt=sai&go=epr&idbas={bc}&idepr={idepr}&idsai={sai}"
             suffix_map = {"national": "", "national_tc": "", "region": "&idreg=3004", "region_tc": "&idreg=3004", "dept": "&iddep=1611", "dept_tc": "&iddep=1611"}
@@ -1470,12 +1502,13 @@ class State(rx.State):
         except:
             top = []
 
-        all_top10_store = json.loads(self.all_top10_json) if self.all_top10_json not in ("{}", "") else {}
-        nageur_top10 = all_top10_store.get(self.active_swimmer_key, {})
-        nageur_top10[f"{nage}|{bl}|{scope}"] = top
-        all_top10_store[self.active_swimmer_key] = nageur_top10
-        self.all_top10_json = json.dumps(all_top10_store)
-        self.top10_loading = False
+        async with self:
+            all_top10_store = json.loads(self.all_top10_json) if self.all_top10_json not in ("{}", "") else {}
+            nageur_top10 = all_top10_store.get(self.active_swimmer_key, {})
+            nageur_top10[f"{nage}|{bl}|{scope}"] = top
+            all_top10_store[self.active_swimmer_key] = nageur_top10
+            self.all_top10_json = json.dumps(all_top10_store)
+            self.top10_loading = False
 
     def close_top10(self):
         self.top10_dialog_open = False
@@ -1560,6 +1593,15 @@ def qualif_row_ui(r: QualifRow) -> rx.Component:
             width="60px", text_align="right",
         ),
         spacing="2", align="center", width="100%",
+    )
+
+def ranking_value_ui(value: rx.Var, color: str) -> rx.Component:
+    """Affiche un rang de classement, ou un spinner pendant son chargement
+    (evite l'impression de bug pendant le court delai de recuperation FFN)."""
+    return rx.cond(
+        State.nage_ranking_loading,
+        rx.spinner(size="1", color=rx.color(color, 9)),
+        rx.text(value, font_size="1em", font_weight="bold", color=rx.color(color, 9)),
     )
 
 def top10_row_ui(entry: Top10Entry) -> rx.Component:
@@ -2153,14 +2195,13 @@ def index():
                     header_nage(),
                     rx.vstack(
                         rx.hstack(
-                            rx.heading(State.selected_nage + " (" + State.current_bassin + ")", size="4", color=rx.color("gray", 12)),
-                            rx.spacer(),
-                            rx.button(
-                                rx.hstack(rx.icon(tag="chevron-left", size=16), rx.text("Retour", font_size="0.8em"), spacing="1", align="center"),
+                            rx.icon_button(
+                                rx.icon(tag="chevron-left", size=18),
                                 on_click=State.nav_back_to_nageur,
-                                variant="ghost", color_scheme="gray", size="1",
+                                variant="ghost", color_scheme="gray", size="2",
                             ),
-                            width="100%", align="center",
+                            rx.heading(State.selected_nage + " (" + State.current_bassin + ")", size="4", color=rx.color("gray", 12)),
+                            spacing="2", align="center", width="100%",
                         ),
                         rx.segmented_control.root(
                             rx.segmented_control.item("25m", value="25m"),
@@ -2180,19 +2221,19 @@ def index():
                                 rx.hstack(
                                     rx.vstack(
                                         rx.hstack(rx.html('<svg width="16" height="11" viewBox="0 0 3 2" style="display:inline-block;vertical-align:middle;border-radius:1px;"><rect width="1" height="2" fill="#002395"/><rect width="1" height="2" x="1" fill="#fff"/><rect width="1" height="2" x="2" fill="#ed2939"/></svg>'), rx.text("France", font_size="0.7em", color=rx.color("gray", 11)), spacing="1", align="center"),
-                                        rx.text(State.ranking_national_tc_txt, font_size="1em", font_weight="bold", color=rx.color("blue", 9)),
+                                        ranking_value_ui(State.ranking_national_tc_txt, "blue"),
                                         spacing="0", align_items="center", flex_grow="1", cursor="pointer", on_click=State.open_top10("national_tc"),
                                     ),
                                     rx.divider(orientation="vertical", height="32px"),
                                     rx.vstack(
                                         rx.hstack(rx.text("🏔", font_size="0.8em"), rx.text("AURA", font_size="0.7em", color=rx.color("gray", 11)), spacing="1", align="center"),
-                                        rx.text(State.ranking_region_tc_txt, font_size="1em", font_weight="bold", color=rx.color("green", 9)),
+                                        ranking_value_ui(State.ranking_region_tc_txt, "green"),
                                         spacing="0", align_items="center", flex_grow="1", cursor="pointer", on_click=State.open_top10("region_tc"),
                                     ),
                                     rx.divider(orientation="vertical", height="32px"),
                                     rx.vstack(
                                         rx.hstack(rx.text("📍", font_size="0.8em"), rx.text("Isère", font_size="0.7em", color=rx.color("gray", 11)), spacing="1", align="center"),
-                                        rx.text(State.ranking_dept_tc_txt, font_size="1em", font_weight="bold", color=rx.color("orange", 9)),
+                                        ranking_value_ui(State.ranking_dept_tc_txt, "orange"),
                                         spacing="0", align_items="center", flex_grow="1", cursor="pointer", on_click=State.open_top10("dept_tc"),
                                     ),
                                     width="100%", align="center", padding_top="8px",
@@ -2208,19 +2249,19 @@ def index():
                                         rx.hstack(
                                             rx.vstack(
                                                 rx.hstack(rx.html('<svg width="16" height="11" viewBox="0 0 3 2" style="display:inline-block;vertical-align:middle;border-radius:1px;"><rect width="1" height="2" fill="#002395"/><rect width="1" height="2" x="1" fill="#fff"/><rect width="1" height="2" x="2" fill="#ed2939"/></svg>'), rx.text("France", font_size="0.7em", color=rx.color("gray", 11)), spacing="1", align="center"),
-                                                rx.text(State.ranking_national_txt, font_size="1em", font_weight="bold", color=rx.color("blue", 9)),
+                                                ranking_value_ui(State.ranking_national_txt, "blue"),
                                                 spacing="0", align_items="center", flex_grow="1", cursor="pointer", on_click=State.open_top10("national"),
                                             ),
                                             rx.divider(orientation="vertical", height="32px"),
                                             rx.vstack(
                                                 rx.hstack(rx.text("🏔", font_size="0.8em"), rx.text("AURA", font_size="0.7em", color=rx.color("gray", 11)), spacing="1", align="center"),
-                                                rx.text(State.ranking_region_txt, font_size="1em", font_weight="bold", color=rx.color("green", 9)),
+                                                ranking_value_ui(State.ranking_region_txt, "green"),
                                                 spacing="0", align_items="center", flex_grow="1", cursor="pointer", on_click=State.open_top10("region"),
                                             ),
                                             rx.divider(orientation="vertical", height="32px"),
                                             rx.vstack(
                                                 rx.hstack(rx.text("📍", font_size="0.8em"), rx.text("Isère", font_size="0.7em", color=rx.color("gray", 11)), spacing="1", align="center"),
-                                                rx.text(State.ranking_dept_txt, font_size="1em", font_weight="bold", color=rx.color("orange", 9)),
+                                                ranking_value_ui(State.ranking_dept_txt, "orange"),
                                                 spacing="0", align_items="center", flex_grow="1", cursor="pointer", on_click=State.open_top10("dept"),
                                             ),
                                             width="100%", align="center", padding_top="8px",
@@ -2231,19 +2272,19 @@ def index():
                                         rx.hstack(
                                             rx.vstack(
                                                 rx.hstack(rx.html('<svg width="16" height="11" viewBox="0 0 3 2" style="display:inline-block;vertical-align:middle;border-radius:1px;"><rect width="1" height="2" fill="#002395"/><rect width="1" height="2" x="1" fill="#fff"/><rect width="1" height="2" x="2" fill="#ed2939"/></svg>'), rx.text("France", font_size="0.7em", color=rx.color("gray", 11)), spacing="1", align="center"),
-                                                rx.text(State.ranking_national_tc_txt, font_size="1em", font_weight="bold", color=rx.color("blue", 9)),
+                                                ranking_value_ui(State.ranking_national_tc_txt, "blue"),
                                                 spacing="0", align_items="center", flex_grow="1", cursor="pointer", on_click=State.open_top10("national_tc"),
                                             ),
                                             rx.divider(orientation="vertical", height="32px"),
                                             rx.vstack(
                                                 rx.hstack(rx.text("🏔", font_size="0.8em"), rx.text("AURA", font_size="0.7em", color=rx.color("gray", 11)), spacing="1", align="center"),
-                                                rx.text(State.ranking_region_tc_txt, font_size="1em", font_weight="bold", color=rx.color("green", 9)),
+                                                ranking_value_ui(State.ranking_region_tc_txt, "green"),
                                                 spacing="0", align_items="center", flex_grow="1", cursor="pointer", on_click=State.open_top10("region_tc"),
                                             ),
                                             rx.divider(orientation="vertical", height="32px"),
                                             rx.vstack(
                                                 rx.hstack(rx.text("📍", font_size="0.8em"), rx.text("Isère", font_size="0.7em", color=rx.color("gray", 11)), spacing="1", align="center"),
-                                                rx.text(State.ranking_dept_tc_txt, font_size="1em", font_weight="bold", color=rx.color("orange", 9)),
+                                                ranking_value_ui(State.ranking_dept_tc_txt, "orange"),
                                                 spacing="0", align_items="center", flex_grow="1", cursor="pointer", on_click=State.open_top10("dept_tc"),
                                             ),
                                             width="100%", align="center", padding_top="8px",

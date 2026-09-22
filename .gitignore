@@ -1,3 +1,5 @@
+.states
+.web
 # Ne jamais versionner config.py (contient les données du nageur)
 config.py
 
