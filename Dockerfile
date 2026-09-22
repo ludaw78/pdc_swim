@@ -30,6 +30,7 @@ FROM python:3.13-slim
 
 RUN apt-get update -y && apt-get install -y --no-install-recommends redis-server && rm -rf /var/lib/apt/lists/*
 COPY --from=caddy:2 /usr/bin/caddy /usr/bin/caddy
+RUN chmod +x /usr/bin/caddy
 
 ARG PORT
 ENV PATH="/app/.venv/bin:$PATH" PORT=$PORT REFLEX_REDIS_URL=redis://localhost PYTHONUNBUFFERED=1
