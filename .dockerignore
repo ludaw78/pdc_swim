@@ -1,0 +1,10 @@
+.git
+.web
+.states
+__pycache__
+*.pyc
+.env
+.env.*
+Dockerfile
+.dockerignore
+node_modules
