@@ -28,9 +28,15 @@ RUN --mount=type=cache,target=/root/.bun/install/cache \
 
 FROM python:3.13-slim
 
-RUN apt-get update -y && apt-get install -y --no-install-recommends redis-server && rm -rf /var/lib/apt/lists/*
+RUN apt-get update -y && apt-get install -y --no-install-recommends redis-server libcap2-bin && rm -rf /var/lib/apt/lists/*
 COPY --from=caddy:2 /usr/bin/caddy /usr/bin/caddy
-RUN chmod +x /usr/bin/caddy
+# L'image officielle Caddy donne au binaire la capacite cap_net_bind_service
+# (pour ecouter sur les ports <1024 sans etre root) - l'environnement sandboxe
+# de Render interdit l'execution de binaires porteurs de cette capacite
+# ("Operation not permitted"). On ecoute sur un port non privilegie (>1024),
+# donc on peut la retirer sans consequence.
+# https://community.render.com/t/caddy-on-render-exec-usr-bin-caddy-operation-not-permitted/22464
+RUN setcap -r /usr/bin/caddy
 
 ARG PORT
 ENV PATH="/app/.venv/bin:$PATH" PORT=$PORT REFLEX_REDIS_URL=redis://localhost PYTHONUNBUFFERED=1
