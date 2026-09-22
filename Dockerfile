@@ -6,7 +6,7 @@
 # PORT=10000 = defaut attendu par Render (pas de champ pour le changer dans leur UI).
 
 ARG PORT=10000
-ARG API_URL
+ARG API_URL=https://pdc-swim.onrender.com
 
 FROM python:3.13-slim AS builder
 
