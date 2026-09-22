@@ -28,7 +28,7 @@ RUN --mount=type=cache,target=/root/.bun/install/cache \
 
 FROM python:3.13-slim
 
-RUN apt-get update -y && apt-get install -y --no-install-recommends redis-server libcap2-bin && rm -rf /var/lib/apt/lists/*
+RUN apt-get update -y && apt-get install -y --no-install-recommends libcap2-bin && rm -rf /var/lib/apt/lists/*
 COPY --from=caddy:2 /usr/bin/caddy /usr/bin/caddy
 # L'image officielle Caddy donne au binaire la capacite cap_net_bind_service
 # (pour ecouter sur les ports <1024 sans etre root) - l'environnement sandboxe
@@ -39,7 +39,7 @@ COPY --from=caddy:2 /usr/bin/caddy /usr/bin/caddy
 RUN setcap -r /usr/bin/caddy
 
 ARG PORT
-ENV PATH="/app/.venv/bin:$PATH" PORT=$PORT REFLEX_REDIS_URL=redis://localhost PYTHONUNBUFFERED=1
+ENV PATH="/app/.venv/bin:$PATH" PORT=$PORT GRANIAN_WORKERS=1 PYTHONUNBUFFERED=1
 
 WORKDIR /app
 RUN adduser --disabled-password --gecos "" --home /app reflex && chown reflex /app
@@ -53,5 +53,4 @@ EXPOSE $PORT
 
 CMD if [ -d alembic ]; then reflex db migrate; fi && \
     caddy start && \
-    redis-server --daemonize yes && \
     exec reflex run --env prod --backend-only
