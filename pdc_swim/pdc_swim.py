@@ -1597,11 +1597,19 @@ def qualif_row_ui(r: QualifRow) -> rx.Component:
 
 def ranking_value_ui(value: rx.Var, color: str) -> rx.Component:
     """Affiche un rang de classement, ou un spinner pendant son chargement
-    (evite l'impression de bug pendant le court delai de recuperation FFN)."""
-    return rx.cond(
-        State.nage_ranking_loading,
-        rx.spinner(size="1", color=rx.color(color, 9)),
-        rx.text(value, font_size="1em", font_weight="bold", color=rx.color(color, 9)),
+    (evite l'impression de bug pendant le court delai de recuperation FFN).
+    Hauteur fixe pour que le passage spinner <-> texte ne fasse pas sauter
+    le reste de la page (les deux ont une taille differente par defaut)."""
+    return rx.box(
+        rx.cond(
+            State.nage_ranking_loading,
+            rx.spinner(size="1", color=rx.color(color, 9)),
+            rx.text(value, font_size="1em", font_weight="bold", color=rx.color(color, 9)),
+        ),
+        height="1.5em",
+        display="flex",
+        align_items="center",
+        justify_content="center",
     )
 
 def top10_row_ui(entry: Top10Entry) -> rx.Component:
