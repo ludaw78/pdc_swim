@@ -2369,7 +2369,16 @@ app = rx.App(
     theme=rx.theme(appearance="inherit"),
     head_components=[
         # Analytics (Umami, respect de la vie privee, pas de cookie - pas de bandeau necessaire)
-        rx.el.script(src="https://cloud.umami.is/script.js", defer=True, custom_attrs={"data-website-id": "1427d690-95e9-424b-98d8-3f68f017eafa"}),
+        # Umami ne regroupe que par chemin : on reecrit l'URL envoyee en /nageur/<cle>[/<nage>]
+        # pour que chaque page nage ait sa propre ligne (l'adresse affichee dans le navigateur ne change pas).
+        rx.el.script(
+            "window.pdcUmamiBeforeSend=function(t,p){try{var u=new URL(p.url),q=u.searchParams,"
+            "k=q.get('nageur'),n=q.get('nage'),m=u.pathname.match(/^\\/nageur\\/([^\\/]+)/);"
+            "if(m)k=m[1];if(k){var s='/nageur/'+k;"
+            "if(n)s+='/'+n.replace(/\\./g,'').trim().replace(/\\s+/g,'-');"
+            "u.pathname=s;u.search='';p.url=u.toString();}}catch(e){}return p;};"
+        ),
+        rx.el.script(src="https://cloud.umami.is/script.js", defer=True, custom_attrs={"data-website-id": "1427d690-95e9-424b-98d8-3f68f017eafa", "data-before-send": "pdcUmamiBeforeSend"}),
         rx.el.script(src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js", defer=True),
         rx.el.script(src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js", defer=True),
         rx.el.script("document.documentElement.lang='fr';"),
