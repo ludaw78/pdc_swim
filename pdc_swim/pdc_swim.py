@@ -1598,6 +1598,12 @@ def qualif_row_ui(r: QualifRow) -> rx.Component:
         spacing="2", align="center", width="100%",
     )
 
+def thin_divider() -> rx.Component:
+    """Trait de separation toujours de 1px physique : un rx.divider() est un aplat de 1px CSS
+    dont l'epaisseur varie (1 ou 2px ecran) selon sa position quand le zoom/DPR est fractionnaire ;
+    une bordure est, elle, arrondie a une epaisseur constante."""
+    return rx.box(width="100%", height="0", border_top="1px solid var(--gray-a6)")
+
 def ranking_value_ui(value: rx.Var, color: str) -> rx.Component:
     """Affiche un rang de classement, ou un spinner pendant son chargement
     (evite l'impression de bug pendant le court delai de recuperation FFN).
@@ -2170,13 +2176,13 @@ def index():
                                 State.available_nages.length() > 0,
                                 rx.vstack(
                                     rx.grid(rx.foreach(State.nages_nl,  lambda n: rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%")), columns="2", spacing="2", width="100%"),
-                                    rx.divider(),
+                                    thin_divider(),
                                     rx.grid(rx.foreach(State.nages_bra, lambda n: rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%")), columns="2", spacing="2", width="100%"),
-                                    rx.divider(),
+                                    thin_divider(),
                                     rx.grid(rx.foreach(State.nages_pap, lambda n: rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%")), columns="2", spacing="2", width="100%"),
-                                    rx.divider(),
+                                    thin_divider(),
                                     rx.grid(rx.foreach(State.nages_dos, lambda n: rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%")), columns="2", spacing="2", width="100%"),
-                                    rx.divider(),
+                                    thin_divider(),
                                     rx.grid(rx.foreach(State.nages_4n,  lambda n: rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%")), columns="2", spacing="2", width="100%"),
                                     spacing="2", width="100%",
                                 ),
