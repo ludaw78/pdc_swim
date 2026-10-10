@@ -2435,7 +2435,7 @@ def index():
                                 rx.table.row(
                                     rx.table.column_header_cell("Date"),
                                     rx.table.column_header_cell("Temps"),
-                                    rx.table.column_header_cell("Pts"),
+                                    rx.table.column_header_cell("Points"),
                                     rx.table.column_header_cell(
                                         rx.popover.root(
                                             rx.popover.trigger(
@@ -2459,7 +2459,7 @@ def index():
                                     lambda r: rx.table.row(
                                         rx.table.cell(r.D),
                                         rx.table.cell(rx.text(r.T, font_weight=rx.cond(r.T == State.best_time_val, "bold", "normal"), color=rx.cond(r.T == State.best_time_val, rx.color("blue", 9), rx.color("gray", 12)))),
-                                        rx.table.cell(rx.text(r.P, color=rx.color("gray", 11))),
+                                        rx.table.cell(rx.text(r.P.split(" ")[0], color=rx.color("gray", 11))),
                                         rx.table.cell(
                                             rx.cond(
                                                 State.annotated_keys.contains(State.active_swimmer_key + "|" + r.D + "|" + r.E + "|" + r.B + "|" + r.T),
