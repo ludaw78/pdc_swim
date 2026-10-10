@@ -71,8 +71,12 @@ SWIMMERS = {
 }
 
 # Intensite (en %) du bleu sur les boutons de nage : du plus faible au plus fort resultat du nageur
-NAGE_COLOR_MIN_PCT = 8
-NAGE_COLOR_MAX_PCT = 55
+NAGE_COLOR_MIN_PCT = 4
+NAGE_COLOR_MAX_PCT = 92
+# Exposant > 1 : accentue les ecarts entre les bons resultats (souvent tres proches en points)
+NAGE_COLOR_GAMMA = 2.0
+# Au-dela de ce niveau (en %), le texte passe en blanc pour rester lisible sur le bleu fonce
+NAGE_COLOR_WHITE_TEXT_PCT = 50
 
 DEFAULT_SWIMMER = "tristan"  # affiché si pas de paramètre ?nageur= dans l'URL
 
@@ -1246,17 +1250,25 @@ class State(rx.State):
         return best
 
     @rx.var(cache=True)
-    def nage_colors(self) -> dict[str, str]:
-        """Fond de chaque bouton de nage : plus fonce = meilleurs points, sur l'echelle propre au nageur."""
+    def nage_levels(self) -> dict[str, int]:
+        """Intensite (%) du bleu de chaque bouton de nage : plus fonce = meilleurs points, sur l'echelle propre au nageur."""
         pts = self.nage_best_points
         if not pts:
             return {}
         lo, hi = min(pts.values()), max(pts.values())
         out = {}
         for nage, p in pts.items():
-            t = (p - lo) / (hi - lo) if hi > lo else 1.0
-            out[nage] = f"color-mix(in srgb, var(--blue-9) {round(NAGE_COLOR_MIN_PCT + (NAGE_COLOR_MAX_PCT - NAGE_COLOR_MIN_PCT) * t)}%, transparent)"
+            t = ((p - lo) / (hi - lo)) ** NAGE_COLOR_GAMMA if hi > lo else 1.0
+            out[nage] = round(NAGE_COLOR_MIN_PCT + (NAGE_COLOR_MAX_PCT - NAGE_COLOR_MIN_PCT) * t)
         return out
+
+    @rx.var(cache=True)
+    def nage_colors(self) -> dict[str, str]:
+        return {n: f"color-mix(in srgb, var(--blue-9) {lv}%, transparent)" for n, lv in self.nage_levels.items()}
+
+    @rx.var(cache=True)
+    def nage_text_colors(self) -> dict[str, str]:
+        return {n: ("white" if lv >= NAGE_COLOR_WHITE_TEXT_PCT else "var(--gray-12)") for n, lv in self.nage_levels.items()}
 
     @rx.var(cache=True)
     def nage_legend(self) -> list[int]:
@@ -1659,8 +1671,7 @@ def qualif_row_ui(r: QualifRow) -> rx.Component:
 def nage_button(n: rx.Var[str]) -> rx.Component:
     return rx.button(
         n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%",
-        color="var(--gray-12)",
-        style={"background": State.nage_colors[n]},
+        style={"background": State.nage_colors[n], "color": State.nage_text_colors[n]},
         _hover={"filter": "brightness(1.15)"},
     )
 
