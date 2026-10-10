@@ -1,0 +1,11 @@
+{
+  "name": "Lise Swim",
+  "short_name": "Lise",
+  "start_url": "/nageur/lise",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ec4899",
+  "icons": [
+    {"src": "/icon.jpg", "sizes": "512x512", "type": "image/jpeg"}
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "name": "Anna Swim",
+  "short_name": "Anna",
+  "start_url": "/nageur/anna",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ec4899",
+  "icons": [
+    {"src": "/icon.jpg", "sizes": "512x512", "type": "image/jpeg"}
+  ]
+}

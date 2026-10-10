@@ -62,6 +62,9 @@ SWIMMERS = {
     "nola":     {"name": "Nola",     "birth_year": 2011, "gender": "F", "ffn_id": "3231817",  "photo": "photo_nola.jpg"},
     "arthur":   {"name": "Arthur",   "birth_year": 2014, "gender": "M", "ffn_id": "3736819",  "photo": "photo_arthur.jpg"},
     "corentin": {"name": "Corentin", "birth_year": 2006, "gender": "M", "ffn_id": "2550147",  "photo": "photo_corentin.jpg"},
+    "nathan":   {"name": "Nathan",   "birth_year": 2007, "gender": "M", "ffn_id": "2620213",  "photo": "photo_nathan.jpg"},
+    "lise":     {"name": "Lise",     "birth_year": 2007, "gender": "F", "ffn_id": "2484563",  "photo": "photo_lise.jpg"},
+    "anna":     {"name": "Anna",     "birth_year": 2011, "gender": "F", "ffn_id": "3232603",  "photo": "photo_anna.jpg"},
     # Alumni : anciens nageurs du club, affiches dans leur propre section sur l'accueil
     "olivia":   {"name": "Olivia",   "birth_year": 2010, "gender": "F", "ffn_id": "3221505",  "photo": "photo_olivia.jpg", "alumni": True},
 }
@@ -2407,3 +2410,6 @@ app.add_page(index, route="/nageur/nola",     on_load=State.on_load_route)
 app.add_page(index, route="/nageur/arthur",   on_load=State.on_load_route)
 app.add_page(index, route="/nageur/corentin", on_load=State.on_load_route)
 app.add_page(index, route="/nageur/olivia",   on_load=State.on_load_route)
+app.add_page(index, route="/nageur/nathan",   on_load=State.on_load_route)
+app.add_page(index, route="/nageur/lise",     on_load=State.on_load_route)
+app.add_page(index, route="/nageur/anna",     on_load=State.on_load_route)
