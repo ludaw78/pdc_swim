@@ -5,6 +5,7 @@ d'un chemin d'import stable pour découvrir les modèles, et cette logique est
 testable isolément du reste de l'app.
 """
 
+import time
 from datetime import datetime, timezone
 
 import reflex as rx
@@ -119,6 +120,47 @@ def save_stroke_counts(
                     )
                 )
         session.commit()
+    invalidate_annotated_cache()
+
+
+# Cache serveur des courses annotees (tous nageurs) : evite de reveiller Neon a chaque affichage
+# de page nage. Invalide a chaque sauvegarde (toutes les ecritures passent par cette appli) ;
+# le TTL n'est qu'un filet de securite.
+_ANNOTATED_TTL_S = 3600
+_annotated_cache: tuple[float, frozenset[str]] | None = None
+
+
+def invalidate_annotated_cache() -> None:
+    global _annotated_cache
+    _annotated_cache = None
+
+
+def _load_all_annotated() -> frozenset[str]:
+    with rx.session() as session:
+        counts = session.exec(
+            select(
+                RaceStrokeCount.swimmer_key, RaceStrokeCount.date, RaceStrokeCount.epreuve,
+                RaceStrokeCount.bassin, RaceStrokeCount.temps,
+            ).distinct()
+        ).all()
+        comments = session.exec(
+            select(
+                RaceComment.swimmer_key, RaceComment.date, RaceComment.epreuve,
+                RaceComment.bassin, RaceComment.temps,
+            ).where(RaceComment.comment != "")
+        ).all()
+    return frozenset("|".join(row) for row in (*counts, *comments))
+
+
+def list_annotated_races(swimmer_key: str) -> list[str]:
+    """Cles "swimmer|date|epreuve|bassin|temps" des courses ayant au moins un nombre de
+    mouvements ou un commentaire non vide saisi par l'entraineur (marqueur de l'historique)."""
+    global _annotated_cache
+    now = time.monotonic()
+    if _annotated_cache is None or now - _annotated_cache[0] > _ANNOTATED_TTL_S:
+        _annotated_cache = (now, _load_all_annotated())
+    prefix = swimmer_key + "|"
+    return sorted(k for k in _annotated_cache[1] if k.startswith(prefix))
 
 
 def export_all_stroke_counts() -> list[dict]:
@@ -157,6 +199,7 @@ def restore_stroke_counts(rows: list[dict]) -> int:
                 session.add(RaceStrokeCount(**{k: v for k, v in row.items() if k != "id"}))
             count += 1
         session.commit()
+    invalidate_annotated_cache()
     return count
 
 
@@ -221,6 +264,7 @@ def save_comment(
                 comment=comment, updated_by=username, updated_at=now,
             ))
         session.commit()
+    invalidate_annotated_cache()
 
 
 def export_all_comments() -> list[dict]:
@@ -256,6 +300,7 @@ def restore_comments(rows: list[dict]) -> int:
                 session.add(RaceComment(**{k: v for k, v in row.items() if k != "id"}))
             count += 1
         session.commit()
+    invalidate_annotated_cache()
     return count
 
 

@@ -32,6 +32,7 @@ from .models import (
     save_stroke_counts as save_stroke_counts_db,
     export_all_stroke_counts,  # noqa: F401  (utilise par backup.py)
     load_comment,
+    list_annotated_races,
     save_comment as save_comment_db,
     export_all_comments,  # noqa: F401  (utilise par backup.py)
     get_user_by_username,
@@ -685,6 +686,8 @@ class State(rx.State):
     dialog_splits_data: list[SplitRow] = []
     dialog_stroke_counts: list[str] = []
     dialog_comment: str = ""
+    # Courses ayant des infos entraineur, cles "swimmer|date|epreuve|bassin|temps" (marqueur de l'historique)
+    annotated_keys: list[str] = []
 
     @rx.var(cache=True)
     def dialog_swim_index(self) -> list[str]:
@@ -938,6 +941,8 @@ class State(rx.State):
             self.active_swimmer_key = key
             self.selected_nage_state = nage if nage else ""
             self.loading_init = False
+            if nage:
+                return [rx.call_script("document.title = 'PdC Swim'"), State.load_annotations]
             return rx.call_script("document.title = 'PdC Swim'")
         self.active_swimmer_key = ""
         self.selected_nage_state = ""
@@ -1059,6 +1064,7 @@ class State(rx.State):
         # (vu dans les logs Reflex : "state was held too longtime_taken=...").
         async with self:
             self.selected_nage_state = n
+        yield State.load_annotations
         yield rx.call_script(
             "(function(){"
             "var u=new URL(window.location.href);"
@@ -1105,6 +1111,11 @@ class State(rx.State):
         finally:
             async with self:
                 self.nage_ranking_loading = False
+
+    def load_annotations(self):
+        """Releve les courses du nageur actif ayant des infos entraineur (pour l'etoile de l'historique)."""
+        if self.active_swimmer_key:
+            self.annotated_keys = list_annotated_races(self.active_swimmer_key)
 
     def nav_back_to_nageur(self):
         self.selected_nage_state = ""
@@ -1546,13 +1557,19 @@ class State(rx.State):
                 dist_label = (dist_match.group(1) + "m") if dist_match else epreuve
                 rows = [SplitRow(dist=dist_label, cumul=matched.T, partiel=matched.T, half="")]
         self.dialog_splits_data = rows
-        # Les 2 requetes DB sont independantes -> en parallele plutot qu'en serie,
-        # pour ne pas payer deux fois la latence reseau vers Neon a chaque ouverture.
-        with ThreadPoolExecutor(max_workers=2) as ex:
-            f_counts = ex.submit(load_stroke_counts, self.active_swimmer_key, date, epreuve, bassin, temps, len(rows))
-            f_comment = ex.submit(load_comment, self.active_swimmer_key, date, epreuve, bassin, temps)
-            self.dialog_stroke_counts = f_counts.result()
-            self.dialog_comment = f_comment.result()
+        race_key = "|".join((self.active_swimmer_key, date, epreuve, bassin, temps))
+        if not self.is_coach and race_key not in self.annotated_keys:
+            # Rien de saisi pour cette course : inutile de reveiller Neon (quota CU-heures).
+            self.dialog_stroke_counts = [""] * len(rows)
+            self.dialog_comment = ""
+        else:
+            # Les 2 requetes DB sont independantes -> en parallele plutot qu'en serie,
+            # pour ne pas payer deux fois la latence reseau vers Neon a chaque ouverture.
+            with ThreadPoolExecutor(max_workers=2) as ex:
+                f_counts = ex.submit(load_stroke_counts, self.active_swimmer_key, date, epreuve, bassin, temps, len(rows))
+                f_comment = ex.submit(load_comment, self.active_swimmer_key, date, epreuve, bassin, temps)
+                self.dialog_stroke_counts = f_counts.result()
+                self.dialog_comment = f_comment.result()
         self.dialog_open = True
 
     def close_dialog(self):
@@ -1582,6 +1599,10 @@ class State(rx.State):
             )
             f1.result()
             f2.result()
+        race_key = "|".join((self.active_swimmer_key, self.dialog_date, self.dialog_epreuve, self.dialog_bassin, self.dialog_temps))
+        has_info = any(v != "" for v in self.dialog_stroke_counts) or self.dialog_comment.strip() != ""
+        others = [k for k in self.annotated_keys if k != race_key]
+        self.annotated_keys = others + [race_key] if has_info else others
         yield rx.toast.success("Enregistré")
 
 # ── 6. COMPOSANTS UI ─────────────────────────────────────────────────────────
@@ -1748,8 +1769,14 @@ def splits_dialog() -> rx.Component:
                 rx.tabs.root(
                     rx.tabs.list(
                         rx.tabs.trigger("Inter.", value="inter"),
-                        rx.tabs.trigger("Mouv.", value="mvt", disabled=State.dialog_movements_tab_disabled),
-                        rx.tabs.trigger("Comment.", value="com", disabled=State.dialog_comment_tab_disabled),
+                        rx.tabs.trigger(
+                            "Mouv.", value="mvt", disabled=State.dialog_movements_tab_disabled,
+                            style={"opacity": rx.cond(State.dialog_movements_tab_disabled, "0.35", "1"), "cursor": rx.cond(State.dialog_movements_tab_disabled, "not-allowed", "pointer")},
+                        ),
+                        rx.tabs.trigger(
+                            "Comment.", value="com", disabled=State.dialog_comment_tab_disabled,
+                            style={"opacity": rx.cond(State.dialog_comment_tab_disabled, "0.35", "1"), "cursor": rx.cond(State.dialog_comment_tab_disabled, "not-allowed", "pointer")},
+                        ),
                     ),
                     rx.tabs.content(
                         rx.box(
@@ -2336,6 +2363,21 @@ def index():
                                     rx.table.column_header_cell("Date"),
                                     rx.table.column_header_cell("Temps"),
                                     rx.table.column_header_cell("Pts"),
+                                    rx.table.column_header_cell(
+                                        rx.popover.root(
+                                            rx.popover.trigger(
+                                                rx.box(
+                                                    rx.icon(tag="info", size=14, color=rx.color("gray", 10)),
+                                                    display="inline-flex", cursor="pointer", title="Info entraîneur",
+                                                ),
+                                            ),
+                                            rx.popover.content(
+                                                rx.text("Une coche indique que l'entraîneur a saisi des mouvements ou un commentaire pour cette course.", font_size="0.8em"),
+                                                size="1", max_width="220px",
+                                            ),
+                                        ),
+                                        text_align="center", width="1%",
+                                    ),
                                 ),
                             ),
                             rx.table.body(
@@ -2345,6 +2387,13 @@ def index():
                                         rx.table.cell(r.D),
                                         rx.table.cell(rx.text(r.T, font_weight=rx.cond(r.T == State.best_time_val, "bold", "normal"), color=rx.cond(r.T == State.best_time_val, rx.color("blue", 9), rx.color("gray", 12)))),
                                         rx.table.cell(rx.text(r.P, color=rx.color("gray", 11))),
+                                        rx.table.cell(
+                                            rx.cond(
+                                                State.annotated_keys.contains(State.active_swimmer_key + "|" + r.D + "|" + r.E + "|" + r.B + "|" + r.T),
+                                                rx.icon(tag="check", size=14, color=rx.color("gray", 11), title="Info entraîneur"),
+                                            ),
+                                            text_align="center",
+                                        ),
                                         cursor="pointer",
                                         _hover={"background_color": "var(--gray-3)"},
                                         on_click=State.open_dialog(r.D, r.E, r.B, r.T, r.N, r.V),
