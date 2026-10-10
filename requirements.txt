@@ -3,3 +3,5 @@ psycopg2-binary==2.9.12
 python-dotenv==1.2.2
 bcrypt==5.0.0
 itsdangerous==2.2.0
+SQLAlchemy==2.0.46
+greenlet==3.3.1
