@@ -2433,9 +2433,9 @@ def index():
                         rx.table.root(
                             rx.table.header(
                                 rx.table.row(
-                                    rx.table.column_header_cell("Date"),
-                                    rx.table.column_header_cell("Temps"),
-                                    rx.table.column_header_cell("Points", text_align="right"),
+                                    rx.table.column_header_cell("Date", width="30%"),
+                                    rx.table.column_header_cell("Temps", text_align="right", width="30%"),
+                                    rx.table.column_header_cell("Points", text_align="right", width="30%"),
                                     rx.table.column_header_cell(
                                         rx.popover.root(
                                             rx.popover.trigger(
@@ -2449,7 +2449,7 @@ def index():
                                                 size="1", max_width="220px",
                                             ),
                                         ),
-                                        text_align="center", width="1%",
+                                        text_align="center", width="10%",
                                     ),
                                 ),
                             ),
@@ -2457,9 +2457,9 @@ def index():
                                 rx.foreach(
                                     State.filtered_data,
                                     lambda r: rx.table.row(
-                                        rx.table.cell(r.D),
-                                        rx.table.cell(rx.text(r.T, font_weight=rx.cond(r.T == State.best_time_val, "bold", "normal"), color=rx.cond(r.T == State.best_time_val, rx.color("blue", 9), rx.color("gray", 12)))),
-                                        rx.table.cell(rx.text(r.P.split(" ")[0], color=rx.color("gray", 11)), text_align="right"),
+                                        rx.table.cell(r.D, white_space="nowrap"),
+                                        rx.table.cell(rx.text(r.T, font_weight=rx.cond(r.T == State.best_time_val, "bold", "normal"), color=rx.cond(r.T == State.best_time_val, rx.color("blue", 9), rx.color("gray", 12))), text_align="right", white_space="nowrap"),
+                                        rx.table.cell(rx.text(r.P.split(" ")[0], color=rx.color("gray", 11)), text_align="right", white_space="nowrap"),
                                         rx.table.cell(
                                             rx.cond(
                                                 State.annotated_keys.contains(State.active_swimmer_key + "|" + r.D + "|" + r.E + "|" + r.B + "|" + r.T),
@@ -2473,7 +2473,7 @@ def index():
                                     ),
                                 ),
                             ),
-                            width="100%", size="1", variant="surface",
+                            width="100%", size="1", variant="surface", style={"& .rt-TableRootTable": {"tableLayout": "fixed"}},
                         ),
                         rx.box(
                             rx.el.canvas(
