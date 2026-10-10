@@ -1686,7 +1686,7 @@ def nage_legend_ui() -> rx.Component:
                 rx.text(State.nage_legend[1].to_string() + " pts", font_size="0.7em", color=rx.color("gray", 10)),
                 width="100%", align="center", spacing="2",
             ),
-            rx.text("Couleur : meilleurs points sur chaque épreuve", font_size="0.7em", color=rx.color("gray", 9)),
+            rx.text("Max. points par épreuve", font_size="0.7em", color=rx.color("gray", 9)),
             spacing="1", width="100%", align_items="center", padding_top="14px",
         ),
     )
