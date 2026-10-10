@@ -70,6 +70,10 @@ SWIMMERS = {
     "olivia":   {"name": "Olivia",   "birth_year": 2010, "gender": "F", "ffn_id": "3221505",  "photo": "photo_olivia.jpg", "alumni": True},
 }
 
+# Intensite (en %) du bleu sur les boutons de nage : du plus faible au plus fort resultat du nageur
+NAGE_COLOR_MIN_PCT = 8
+NAGE_COLOR_MAX_PCT = 55
+
 DEFAULT_SWIMMER = "tristan"  # affiché si pas de paramètre ?nageur= dans l'URL
 
 # Hauteur d'une ligne (intermediaire/mouvement) dans la pop-up course, et hauteur
@@ -1230,6 +1234,39 @@ class State(rx.State):
         return [n for n in self.available_nages if "4 N" in n.upper()]
 
     @rx.var(cache=True)
+    def nage_best_points(self) -> dict[str, int]:
+        """Meilleurs points FFN par epreuve dans le bassin courant."""
+        best: dict[str, int] = {}
+        for r in self.current_results_list:
+            if r.B != self.current_bassin:
+                continue
+            m = re.search(r"\d+", r.P)
+            if m:
+                best[r.E] = max(best.get(r.E, 0), int(m.group()))
+        return best
+
+    @rx.var(cache=True)
+    def nage_colors(self) -> dict[str, str]:
+        """Fond de chaque bouton de nage : plus fonce = meilleurs points, sur l'echelle propre au nageur."""
+        pts = self.nage_best_points
+        if not pts:
+            return {}
+        lo, hi = min(pts.values()), max(pts.values())
+        out = {}
+        for nage, p in pts.items():
+            t = (p - lo) / (hi - lo) if hi > lo else 1.0
+            out[nage] = f"color-mix(in srgb, var(--blue-9) {round(NAGE_COLOR_MIN_PCT + (NAGE_COLOR_MAX_PCT - NAGE_COLOR_MIN_PCT) * t)}%, transparent)"
+        return out
+
+    @rx.var(cache=True)
+    def nage_legend(self) -> list[int]:
+        """[min, max] des meilleurs points affiches ; vide s'il n'y a pas d'ecart a representer."""
+        pts = self.nage_best_points
+        if len(pts) < 2 or min(pts.values()) == max(pts.values()):
+            return []
+        return [min(pts.values()), max(pts.values())]
+
+    @rx.var(cache=True)
     def selected_nage(self) -> str:
         return self.selected_nage_state
 
@@ -1617,6 +1654,30 @@ def qualif_row_ui(r: QualifRow) -> rx.Component:
             width="60px", text_align="right",
         ),
         spacing="2", align="center", width="100%",
+    )
+
+def nage_button(n: rx.Var[str]) -> rx.Component:
+    return rx.button(
+        n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%",
+        color="var(--gray-12)",
+        style={"background": State.nage_colors[n]},
+        _hover={"filter": "brightness(1.15)"},
+    )
+
+def nage_legend_ui() -> rx.Component:
+    ramp = f"linear-gradient(to right, color-mix(in srgb, var(--blue-9) {NAGE_COLOR_MIN_PCT}%, transparent), color-mix(in srgb, var(--blue-9) {NAGE_COLOR_MAX_PCT}%, transparent))"
+    return rx.cond(
+        State.nage_legend.length() > 0,
+        rx.vstack(
+            rx.hstack(
+                rx.text(State.nage_legend[0].to_string() + " pts", font_size="0.7em", color=rx.color("gray", 10)),
+                rx.box(flex="1", height="8px", border_radius="4px", style={"background": ramp}),
+                rx.text(State.nage_legend[1].to_string() + " pts", font_size="0.7em", color=rx.color("gray", 10)),
+                width="100%", align="center", spacing="2",
+            ),
+            rx.text("Couleur : meilleurs points sur chaque épreuve", font_size="0.7em", color=rx.color("gray", 9)),
+            spacing="1", width="100%", align_items="center",
+        ),
     )
 
 def thin_divider() -> rx.Component:
@@ -2202,15 +2263,16 @@ def index():
                             rx.cond(
                                 State.available_nages.length() > 0,
                                 rx.vstack(
-                                    rx.grid(rx.foreach(State.nages_nl,  lambda n: rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%")), columns="2", spacing="2", width="100%"),
+                                    rx.grid(rx.foreach(State.nages_nl,  nage_button), columns="2", spacing="2", width="100%"),
                                     thin_divider(),
-                                    rx.grid(rx.foreach(State.nages_bra, lambda n: rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%")), columns="2", spacing="2", width="100%"),
+                                    rx.grid(rx.foreach(State.nages_bra, nage_button), columns="2", spacing="2", width="100%"),
                                     thin_divider(),
-                                    rx.grid(rx.foreach(State.nages_pap, lambda n: rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%")), columns="2", spacing="2", width="100%"),
+                                    rx.grid(rx.foreach(State.nages_pap, nage_button), columns="2", spacing="2", width="100%"),
                                     thin_divider(),
-                                    rx.grid(rx.foreach(State.nages_dos, lambda n: rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%")), columns="2", spacing="2", width="100%"),
+                                    rx.grid(rx.foreach(State.nages_dos, nage_button), columns="2", spacing="2", width="100%"),
                                     thin_divider(),
-                                    rx.grid(rx.foreach(State.nages_4n,  lambda n: rx.button(n, on_click=lambda: State.nav_to_nage(n), variant="soft", width="100%")), columns="2", spacing="2", width="100%"),
+                                    rx.grid(rx.foreach(State.nages_4n,  nage_button), columns="2", spacing="2", width="100%"),
+                                    nage_legend_ui(),
                                     spacing="2", width="100%",
                                 ),
                                 rx.center(
