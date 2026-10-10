@@ -2433,8 +2433,8 @@ def index():
                         rx.table.root(
                             rx.table.header(
                                 rx.table.row(
-                                    rx.table.column_header_cell("Date", width="30%"),
-                                    rx.table.column_header_cell("Temps", text_align="right", width="30%"),
+                                    rx.table.column_header_cell("Date", text_align="center", width="30%"),
+                                    rx.table.column_header_cell("Temps", text_align="center", width="30%"),
                                     rx.table.column_header_cell("Points", text_align="right", width="30%"),
                                     rx.table.column_header_cell(
                                         rx.popover.root(
