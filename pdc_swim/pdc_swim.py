@@ -1049,18 +1049,6 @@ class State(rx.State):
         except:
             return {}
 
-    @rx.var(cache=True)
-    def last_up_display(self) -> str:
-        try:
-            d = json.loads(self.all_last_update)
-            val = float(d.get(self.active_swimmer_key, 0))
-            if val <= 0: return ""
-            from datetime import timezone
-            dt = datetime.fromtimestamp(val, tz=timezone.utc).astimezone()
-            return f"MAJ : {dt.strftime('%d/%m/%Y %H:%M')}"
-        except:
-            return ""
-
     # ── Navigation ────────────────────────────────────────────────────────────
 
     def select_swimmer(self, key: str):
@@ -2320,7 +2308,6 @@ def index():
                             ),
                             width="100%", align_items="start", spacing="1",
                         ),
-                        rx.text(State.last_up_display, font_size="0.7em", color=rx.color("gray", 10)),
                         spacing="4", padding="1em", width="100%",
                     ),
                     width=["100%", "420px"], spacing="0",
