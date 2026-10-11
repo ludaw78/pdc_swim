@@ -2,7 +2,9 @@ import reflex as rx
 import urllib.request
 import re
 import html
+import base64
 import json
+import zlib
 import os
 import time
 from datetime import datetime
@@ -666,6 +668,22 @@ def _fetch_one(args: tuple) -> tuple:
 
 # ── 5. STATE ──────────────────────────────────────────────────────────────────
 
+# Les donnees mises en cache dans le navigateur (rx.LocalStorage) sont renvoyees au serveur a chaque
+# evenement, et la connexion websocket est coupee au-dela de 1 Mo : 12 nageurs consultes depassaient
+# la limite (ecran de chargement infini). On les compresse (zlib + base64, ~6x plus petit).
+def _pack(obj) -> str:
+    return "z:" + base64.urlsafe_b64encode(zlib.compress(json.dumps(obj, separators=(",", ":")).encode(), 9)).decode()
+
+def _unpack(s: str):
+    if not s or s == "{}":
+        return {}
+    try:
+        if s.startswith("z:"):
+            return json.loads(zlib.decompress(base64.urlsafe_b64decode(s[2:])))
+        return json.loads(s)
+    except Exception:
+        return {}
+
 class State(rx.State):
     # Navigation : "" = accueil, "tristan" = page nageur, "tristan|100 Bra" = page nage
     active_swimmer_key: str = ""
@@ -673,10 +691,10 @@ class State(rx.State):
     current_bassin: str = "50m"
     selected_nage_state: str = ""
     # Données par nageur — clé = swimmer_key
-    all_results_json:   str = rx.LocalStorage("{}", name="multi_results_v1")
-    all_rankings_json:  str = rx.LocalStorage("{}", name="multi_ranks_v1")
-    all_top10_json:     str = rx.LocalStorage("{}", name="multi_top10_v1")
-    all_last_update:    str = rx.LocalStorage("{}", name="multi_upd_v1")
+    all_results_json:   str = rx.LocalStorage("{}", name="multi_results_v2")
+    all_rankings_json:  str = rx.LocalStorage("{}", name="multi_ranks_v2")
+    all_top10_json:     str = rx.LocalStorage("{}", name="multi_top10_v2")
+    all_last_update:    str = rx.LocalStorage("{}", name="multi_upd_v2")
     loading: bool = False
     # Dialogs
     top10_dialog_open:  bool = False
@@ -1013,21 +1031,21 @@ class State(rx.State):
     @rx.var(cache=True)
     def active_results(self) -> list:
         try:
-            return json.loads(self.all_results_json).get(self.active_swimmer_key, [])
+            return _unpack(self.all_results_json).get(self.active_swimmer_key, [])
         except:
             return []
 
     @rx.var(cache=True)
     def active_rankings(self) -> dict:
         try:
-            return json.loads(self.all_rankings_json).get(self.active_swimmer_key, {})
+            return _unpack(self.all_rankings_json).get(self.active_swimmer_key, {})
         except:
             return {}
 
     @rx.var(cache=True)
     def active_top10(self) -> dict:
         try:
-            return json.loads(self.all_top10_json).get(self.active_swimmer_key, {})
+            return _unpack(self.all_top10_json).get(self.active_swimmer_key, {})
         except:
             return {}
 
@@ -1103,16 +1121,16 @@ class State(rx.State):
                 try:
                     _, epr_name, _, rank, top = _fetch_one((bc, bll, nage, idepr, sai, cat, "dept", ffn_id))
                     async with self:
-                        all_rankings = json.loads(self.all_rankings_json) if self.all_rankings_json not in ("{}", "") else {}
+                        all_rankings = _unpack(self.all_rankings_json)
                         nr = all_rankings.get(swimmer_key, {})
                         nr[f"{epr_name}|{bll}"] = rank
                         all_rankings[swimmer_key] = nr
-                        self.all_rankings_json = json.dumps(all_rankings)
-                        all_top10 = json.loads(self.all_top10_json) if self.all_top10_json not in ("{}", "") else {}
+                        self.all_rankings_json = _pack(all_rankings)
+                        all_top10 = _unpack(self.all_top10_json)
                         nt = all_top10.get(swimmer_key, {})
                         nt[f"{epr_name}|{bll}|dept"] = top
                         all_top10[swimmer_key] = nt
-                        self.all_top10_json = json.dumps(all_top10)
+                        self.all_top10_json = _pack(all_top10)
                     yield
                 except Exception as e:
                     print(f"[nav_to_nage] ERREUR {nage}|{bll}: {e}")
@@ -1488,20 +1506,20 @@ class State(rx.State):
                 # Remplacement par bassin, seulement si son scraping a reussi : si un
                 # bassin echoue (timeout FFN, etc.), on garde ses anciennes donnees au
                 # lieu d'ecraser tout le nageur avec une liste partielle (perte silencieuse).
-                all_results  = json.loads(self.all_results_json)  if self.all_results_json  not in ("{}", "") else {}
+                all_results  = _unpack(self.all_results_json)
                 all_upd      = json.loads(self.all_last_update)   if self.all_last_update   not in ("{}", "") else {}
                 all_results[key] = results_by_bassin["25m"] + results_by_bassin["50m"]
                 if any_success:
                     all_upd[key] = time.time()
-                self.all_results_json  = json.dumps(all_results)
+                self.all_results_json  = _pack(all_results)
                 self.all_last_update   = json.dumps(all_upd)
                 # Effacer classements et top10 pour forcer un rechargement à la demande
-                all_rankings = json.loads(self.all_rankings_json) if self.all_rankings_json not in ("{}", "") else {}
+                all_rankings = _unpack(self.all_rankings_json)
                 all_rankings[key] = {}
-                self.all_rankings_json = json.dumps(all_rankings)
-                all_top10 = json.loads(self.all_top10_json) if self.all_top10_json not in ("{}", "") else {}
+                self.all_rankings_json = _pack(all_rankings)
+                all_top10 = _unpack(self.all_top10_json)
                 all_top10[key] = {}
-                self.all_top10_json = json.dumps(all_top10)
+                self.all_top10_json = _pack(all_top10)
 
         except Exception as e:
             print(f"[force_refresh] ERREUR: {type(e).__name__}: {e}")
@@ -1566,11 +1584,11 @@ class State(rx.State):
             top = []
 
         async with self:
-            all_top10_store = json.loads(self.all_top10_json) if self.all_top10_json not in ("{}", "") else {}
+            all_top10_store = _unpack(self.all_top10_json)
             nageur_top10 = all_top10_store.get(self.active_swimmer_key, {})
             nageur_top10[f"{nage}|{bl}|{scope}"] = top
             all_top10_store[self.active_swimmer_key] = nageur_top10
-            self.all_top10_json = json.dumps(all_top10_store)
+            self.all_top10_json = _pack(all_top10_store)
             self.top10_loading = False
 
     def close_top10(self):
@@ -2513,6 +2531,7 @@ app = rx.App(
         rx.el.script(src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js", defer=True),
         rx.el.script(src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js", defer=True),
         rx.el.script("document.documentElement.lang='fr';"),
+        rx.el.script("try{['multi_results_v1','multi_ranks_v1','multi_top10_v1','multi_upd_v1'].forEach(function(k){localStorage.removeItem(k)})}catch(e){}"),
         rx.el.title("PdC Swim"),
         rx.el.meta(http_equiv="content-language", content="fr"),
         rx.el.style("html { overflow-y: scroll; }"),
